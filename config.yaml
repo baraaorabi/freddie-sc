@@ -1,0 +1,24 @@
+outpath:
+    test/dev/
+
+gurobi:
+    license: /home/$USER/gurobi.lic
+    timeout: 1
+
+exec:
+    split    : py/freddie_split.py
+    segment  : py/freddie_segment.py
+    cluster  : py/freddie_cluster.py
+    isoforms : py/freddie_isoforms.py
+
+samples:
+    S1:
+        ref      : homo_sapiens
+        reads    :
+            - test/data/S1.fastq
+
+references:
+    homo_sapiens:
+        annot      : test/refs/homo_sapiens.annot.gtf
+        genome     : test/refs/homo_sapiens.dna.fa
+        genome_fai : test/refs/homo_sapiens.dna.fa.fai
