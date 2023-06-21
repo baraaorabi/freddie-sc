@@ -1,8 +1,8 @@
 outpath:
-    test/dev/
+    output/
 
 gurobi:
-    license: /home/$USER/gurobi.lic
+    license: ~/gurobi.lic
     timeout: 1
 
 exec:
@@ -15,10 +15,10 @@ samples:
     S1:
         ref      : homo_sapiens
         reads    :
-            - test/data/S1.fastq
+            - output/data/S1.fastq
 
 references:
     homo_sapiens:
-        annot      : test/refs/homo_sapiens.annot.gtf
-        genome     : test/refs/homo_sapiens.dna.fa
-        genome_fai : test/refs/homo_sapiens.dna.fa.fai
+        annot      : output/refs/homo_sapiens.annot.gtf
+        genome     : output/refs/homo_sapiens.dna.fa
+        genome_fai : output/refs/homo_sapiens.dna.fa.fai

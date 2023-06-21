@@ -1,0 +1,134 @@
+outpath: output/simulate
+enable_piping: false
+# Pipeline modules
+
+# >---- Entry point modules. Produce MDF as output. 
+# Mrg :
+## Merge the output of multiple pipelines into a single MDF and use it as input.
+## Takes sources key-value pair whose value is a list of pipeline names to merge.
+## The multiple pipelines can have different models and different references.
+## Must include params key-value as a list (not string) of pipeline names to merge.
+# Tsb : 
+## Splices the genome. Generates transcripts based on the model expression.
+## Tsb module allows for params key-value pair with the value being a string.
+## Must include mode (either Xpr or Xpr_sc) and model (sample name) key-value pairs.
+
+# >----> Core modules with MDF as input and MDF as output.
+## All these modules take params key-value pair with string values
+# Flt : Filters molecules out molecules that fail the given conditions
+# PCR : PCR amplification
+# plA : polyA tailing
+# SCB : Single-cell barcoding of molecules (from tags added by Tsb module with Xpr_sc mode)
+# Tag : Tag the molecules with on 5' or 3' end with specified FASTA pattern
+# Flp : Flib the molecule strands with a given probability
+# Trc : Truncate the molecules. Takes model (sample name) key-value pair
+
+# ----> Terminal sequencing module with FASTQ/A as output.
+# Seq : 
+## Sequence the molecules. Can only be last module in its pipeline. 
+## Takes model (sample name or TKSM error/qscore model name (try: tksm sequence -h)) key-value pair.
+TS_experiments:
+    S1_h:
+        pipeline:
+            - Tsb:
+                params: "--molecule-count 1000000"
+                model: "N1"
+                mode: Xpr_sc
+            - Trc:
+                params: ""
+                model: "N1"
+    S1_p1:
+        pipeline:
+            - Mrg:
+                sources: ["S1_h",]
+            - Flt:
+                params: "-c \"info CB\""
+            - plA:
+                params: "--normal=15,7.5"
+            - Tag: 
+                params: "--format3 10"
+            - SCB: 
+                params: ""
+            - Tag:
+                params: "--format3 AGATCGGAAGAGCGTCGTGTAG"
+    S1_p2:
+        pipeline:
+            - Mrg:
+                sources: ["S1_h",]
+            - Flt:
+                params: "-c \"info CB\" --negate"
+    S1:
+        pipeline:
+            - Mrg:
+                sources: ["S1_p1", "S1_p2"]
+            - PCR:
+                params: "--cycles 5 --molecule-count 5000000 -x Taq-setting1"
+            - Flp:
+                params: "-p 0.5"
+            - Tag:
+                params: "--format5 AATGTACTTCGTTCAGTTACGTATTGCT --format3 GCAATACGTAACTGAACGAAGT"
+            - Seq:
+                params: "--skip-qual-compute"
+                model: "N1"
+    S1_chr21_h:
+        pipeline:
+            - Tsb:
+                params: "--molecule-count 1000000"
+                model: "N1_chr21"
+                mode: Xpr_sc
+            - Trc:
+                params: ""
+                model: "N1_chr21"
+    S1_chr21_p1:
+        pipeline:
+            - Mrg:
+                sources: ["S1_chr21_h",]
+            - Flt:
+                params: "-c \"info CB\""
+            - plA:
+                params: "--normal=15,7.5"
+            - Tag: 
+                params: "--format3 10"
+            - SCB: 
+                params: ""
+            - Tag:
+                params: "--format3 AGATCGGAAGAGCGTCGTGTAG"
+    S1_chr21_p2:
+        pipeline:
+            - Mrg:
+                sources: ["S1_chr21_h",]
+            - Flt:
+                params: "-c \"info CB\" --negate"
+    S1_chr21:
+        pipeline:
+            - Mrg:
+                sources: ["S1_chr21_p1", "S1_chr21_p2"]
+            - PCR:
+                params: "--cycles 5 --molecule-count 5000000 -x Taq-setting1"
+            - Flp:
+                params: "-p 0.5"
+            - Tag:
+                params: "--format5 AATGTACTTCGTTCAGTTACGTATTGCT --format3 GCAATACGTAACTGAACGAAGT"
+            - Seq:
+                params: "--skip-qual-compute"
+                model: "N1_chr21"
+
+exec:
+    tksm: build/bin/tksm
+
+refs:
+    Homo_sapiens:
+        GTF : output/refs/homo_sapiens.annot.gtf
+        DNA : output/refs/homo_sapiens.dna.fa
+        cDNA : output/refs/homo_sapiens.cdna.fa
+    10x_bc: data/refs/3M-february-2018.txt.gz
+
+samples:
+    "N1":
+        fastq:
+            - data/samples/N1.fastq
+        ref: Homo_sapiens
+    "N1_chr21":
+        fastq:
+            - data/samples/N1_subsample.fastq.gz
+        ref: Homo_sapiens
