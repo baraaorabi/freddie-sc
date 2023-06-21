@@ -1,0 +1,7 @@
+channels:
+  - anaconda
+  - bioconda
+  - conda-forge
+  - nodefaults
+dependencies:
+  - minimap2==2.26

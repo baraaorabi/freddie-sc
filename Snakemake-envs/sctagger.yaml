@@ -1,0 +1,7 @@
+channels:
+  - anaconda
+  - bioconda
+  - conda-forge
+  - nodefaults
+dependencies:
+  - sctagger==1.1.1

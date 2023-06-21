@@ -4,7 +4,7 @@ from collections import Counter
 
 if len(config) == 0:
 
-    configfile: "config.yaml"
+    configfile: "Simulate.config.yaml"
 
 
 outpath = config["outpath"]
@@ -179,6 +179,8 @@ rule sequence:
         fastas=lambda wc: get_sample_ref(wc.exprmnt, "DNA"),
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm sequence"
         " -i {input.mdf}"
@@ -199,6 +201,8 @@ rule filter:
         other=lambda wc: get_step(wc.exprmnt, f"{wc.prefix}.Flt")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm filter"
         " -i {input.mdf}"
@@ -217,6 +221,8 @@ rule truncate:
         kde=lambda wc: ",".join(get_kde_model_input(wc)),
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm truncate"
         " -i {input.mdf}"
@@ -234,6 +240,8 @@ rule unsegment:
         other=lambda wc: get_step(wc.exprmnt, f"{wc.prefix}.Uns")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm unsegment"
         " -i {input.mdf}"
@@ -250,6 +258,8 @@ rule shuffle:
         other=lambda wc: get_step(wc.exprmnt, f"{wc.prefix}.Shf")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm shuffle"
         " -i {input.mdf}"
@@ -266,6 +276,8 @@ rule flip:
         other=lambda wc: get_step(wc.exprmnt, f"{wc.prefix}.Flp")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm flip"
         " -i {input.mdf}"
@@ -282,6 +294,8 @@ rule pcr:
         other=lambda wc: get_step(wc.exprmnt, f"{wc.prefix}.PCR")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm pcr"
         " -i {input.mdf}"
@@ -298,6 +312,8 @@ rule tag:
         other=lambda wc: get_step(wc.exprmnt, f"{wc.prefix}.Tag")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm tag"
         " -i {input.mdf}"
@@ -314,6 +330,8 @@ rule single_cell_barcoder:
         other=lambda wc: get_step(wc.exprmnt, f"{wc.prefix}.SCB")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm scb"
         " -i {input.mdf}"
@@ -330,6 +348,8 @@ rule polyA:
         other=lambda wc: get_step(wc.exprmnt, f"{wc.prefix}.plA")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm polyA"
         " -i {input.mdf}"
@@ -348,6 +368,8 @@ rule transcribe:
         other=lambda wc: get_step(wc.exprmnt, f"Tsb")["params"],
     wildcard_constraints:
         exprmnt=exprmnts_re,
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm transcribe"
         " -a {input.tsv}"
@@ -384,6 +406,8 @@ rule abundance:
         paf=f"{preproc_d}/minimap2/{{sample}}.cDNA.paf",
     output:
         tsv=f"{preproc_d}/tksm_abundance/{{sample}}.Xpr.tsv",
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm abundance"
         " -p {input.paf}"
@@ -396,6 +420,8 @@ rule abundance_sc:
         lr_matches=f"{preproc_d}/scTagger/{{sample}}/{{sample}}.lr_matches.tsv.gz",
     output:
         tsv=f"{preproc_d}/tksm_abundance/{{sample}}.Xpr_sc.tsv",
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm abundance"
         " -p {input.paf}"
@@ -413,6 +439,8 @@ rule model_truncation:
     params:
         out_prefix=f"{preproc_d}/models/truncate/{{sample}}",
     threads: 32
+    conda:
+        "Snakemake-envs/tksm.yaml"
     shell:
         "tksm model-truncation"
         " -i {input.paf}"
@@ -427,6 +455,8 @@ rule minimap_cdna:
     output:
         paf=f"{preproc_d}/minimap2/{{sample}}.cDNA.paf",
     threads: 32
+    conda:
+        "Snakemake-envs/minimap2.yaml"
     shell:
         "minimap2"
         " -t {threads}"
@@ -445,6 +475,8 @@ rule scTagger_match:
     output:
         lr_tsv=f"{preproc_d}/scTagger/{{sample}}/{{sample}}.lr_matches.tsv.gz",
     threads: 32
+    conda:
+        "Snakemake-envs/sctagger.yaml"
     shell:
         "scTagger.py match_trie"
         " -lr {input.lr_tsv}"
@@ -459,6 +491,8 @@ rule scTagger_extract_bc:
         wl=config["refs"]["10x_bc"],
     output:
         tsv=f"{preproc_d}/scTagger/{{sample}}/{{sample}}.bc_whitelist.tsv.gz",
+    conda:
+        "Snakemake-envs/sctagger.yaml"
     shell:
         "scTagger.py extract_sr_bc_from_lr"
         " -i {input.tsv}"
@@ -472,6 +506,8 @@ rule scTagger_lr_seg:
     output:
         tsv=f"{preproc_d}/scTagger/{{sample}}/{{sample}}.lr_bc.tsv.gz",
     threads: 32
+    conda:
+        "Snakemake-envs/sctagger.yaml"
     shell:
         "scTagger.py extract_lr_bc"
         " -r {input.reads}"
@@ -486,6 +522,8 @@ rule minimap_cdna_for_badread_models:
     output:
         paf=f"{preproc_d}/badread/{{sample}}.badread.cDNA.paf",
     threads: 32
+    conda:
+        "Snakemake-envs/minimap2.yaml"
     shell:
         "minimap2"
         " -t {threads}"
@@ -503,6 +541,8 @@ rule badread_error_model:
         paf=f"{preproc_d}/badread/{{sample}}.badread.cDNA.paf",
     output:
         model=f"{preproc_d}/models/badread/{{sample}}.error.gz",
+    conda:
+        "Snakemake-envs/badread.yaml"
     shell:
         "badread error_model"
         " --reads {input.reads}"
@@ -519,6 +559,8 @@ rule badread_qscore_model:
         paf=f"{preproc_d}/badread/{{sample}}.badread.cDNA.paf",
     output:
         model=f"{preproc_d}/models/badread/{{sample}}.qscore.gz",
+    conda:
+        "Snakemake-envs/badread.yaml"
     shell:
         "badread qscore_model"
         " --reads {input.reads}"

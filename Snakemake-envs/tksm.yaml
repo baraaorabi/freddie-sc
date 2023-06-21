@@ -1,0 +1,7 @@
+channels:
+  - anaconda
+  - bioconda
+  - conda-forge
+  - nodefaults
+dependencies:
+  - tksm==0.3.0

@@ -70,65 +70,19 @@ TS_experiments:
             - Seq:
                 params: "--skip-qual-compute"
                 model: "N1"
-    S1_chr21_h:
-        pipeline:
-            - Tsb:
-                params: "--molecule-count 1000000"
-                model: "N1_chr21"
-                mode: Xpr_sc
-            - Trc:
-                params: ""
-                model: "N1_chr21"
-    S1_chr21_p1:
-        pipeline:
-            - Mrg:
-                sources: ["S1_chr21_h",]
-            - Flt:
-                params: "-c \"info CB\""
-            - plA:
-                params: "--normal=15,7.5"
-            - Tag: 
-                params: "--format3 10"
-            - SCB: 
-                params: ""
-            - Tag:
-                params: "--format3 AGATCGGAAGAGCGTCGTGTAG"
-    S1_chr21_p2:
-        pipeline:
-            - Mrg:
-                sources: ["S1_chr21_h",]
-            - Flt:
-                params: "-c \"info CB\" --negate"
-    S1_chr21:
-        pipeline:
-            - Mrg:
-                sources: ["S1_chr21_p1", "S1_chr21_p2"]
-            - PCR:
-                params: "--cycles 5 --molecule-count 5000000 -x Taq-setting1"
-            - Flp:
-                params: "-p 0.5"
-            - Tag:
-                params: "--format5 AATGTACTTCGTTCAGTTACGTATTGCT --format3 GCAATACGTAACTGAACGAAGT"
-            - Seq:
-                params: "--skip-qual-compute"
-                model: "N1_chr21"
 
 exec:
     tksm: build/bin/tksm
 
 refs:
     Homo_sapiens:
-        GTF : output/refs/homo_sapiens.annot.gtf
-        DNA : output/refs/homo_sapiens.dna.fa
-        cDNA : output/refs/homo_sapiens.cdna.fa
+        GTF : data/refs/homo_sapiens.annot.gtf
+        DNA : data/refs/homo_sapiens.dna.fa
+        cDNA : data/refs/homo_sapiens.cdna.fa
     10x_bc: data/refs/3M-february-2018.txt.gz
 
 samples:
     "N1":
         fastq:
             - data/samples/N1.fastq
-        ref: Homo_sapiens
-    "N1_chr21":
-        fastq:
-            - data/samples/N1_subsample.fastq.gz
         ref: Homo_sapiens
