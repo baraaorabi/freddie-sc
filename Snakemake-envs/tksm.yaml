@@ -4,4 +4,4 @@ channels:
   - conda-forge
   - nodefaults
 dependencies:
-  - tksm==0.3.0
+  - tksm==0.3.1

@@ -67,6 +67,8 @@ TS_experiments:
                 params: "-p 0.5"
             - Tag:
                 params: "--format5 AATGTACTTCGTTCAGTTACGTATTGCT --format3 GCAATACGTAACTGAACGAAGT"
+            - Shf:
+                params: ""
             - Seq:
                 params: "--skip-qual-compute"
                 model: "N1"
