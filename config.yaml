@@ -1,24 +1,23 @@
-outpath:
-    output/
+outpath: output/
 
 gurobi:
     license: ~/gurobi.lic
     timeout: 1
 
 exec:
-    split    : py/freddie_split.py
-    segment  : py/freddie_segment.py
-    cluster  : py/freddie_cluster.py
-    isoforms : py/freddie_isoforms.py
+    split: py/freddie_split.py
+    segment: py/freddie_segment.py
+    cluster: py/freddie_cluster.py
+    isoforms: py/freddie_isoforms.py
 
 samples:
     S1:
-        ref      : homo_sapiens
-        reads    :
-            - output/data/S1.fastq
+        ref: homo_sapiens
+        reads: output/simulate/TS/S1.fastq
+        truth: output/simulate/TS/S1.tsv
 
 references:
     homo_sapiens:
-        annot      : output/refs/homo_sapiens.annot.gtf
-        genome     : output/refs/homo_sapiens.dna.fa
-        genome_fai : output/refs/homo_sapiens.dna.fa.fai
+        annot: output/refs/homo_sapiens.annot.gtf
+        genome: output/refs/homo_sapiens.dna.fa
+        genome_fai: output/refs/homo_sapiens.dna.fa.fai
