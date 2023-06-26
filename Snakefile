@@ -3,39 +3,39 @@ configfile: "config.yaml"
 
 outpath = config["outpath"].rstrip("/")
 
-output_d = "{}/results".format(outpath)
-logs_d = "{}/logs".format(outpath)
+output_d = f"{outpath}/results"
+logs_d = f"{outpath}/logs"
 
 
 rule all:
     input:
         expand(
-            "{}/{{sample}}/{{sample}}.sorted.bam".format(output_d),
+            f"{output_d}/{{sample}}/{{sample}}.sorted.bam",
             sample=config["samples"],
         ),
-        expand("{}/{{sample}}/freddie.split".format(output_d), sample=config["samples"]),
         expand(
-            "{}/{{sample}}/freddie.segment".format(output_d), sample=config["samples"]
+            f"{output_d}/scTagger/{{sample}}/{{sample}}.lr_matches.tsv.gz",
+            sample=config["samples"],
         ),
+        expand(f"{output_d}/{{sample}}/freddie.split", sample=config["samples"]),
+        expand(f"{output_d}/{{sample}}/freddie.segment", sample=config["samples"]),
+        expand(f"{output_d}/{{sample}}/freddie.cluster", sample=config["samples"]),
         expand(
-            "{}/{{sample}}/freddie.cluster".format(output_d), sample=config["samples"]
-        ),
-        expand(
-            "{}/{{sample}}/freddie.isoforms.gtf".format(output_d),
+            f"{output_d}/{{sample}}/freddie.isoforms.gtf",
             sample=config["samples"],
         ),
 
 
 rule minimap2:
     input:
-        reads=lambda wildcards: config["samples"][wildcards.sample]["reads"],
-        genome=lambda wildcards: config["references"][
-            config["samples"][wildcards.sample]["ref"]
-        ]["genome"],
+        reads=lambda wc: config["samples"][wc.sample]["reads"],
+        genome=lambda wc: config["refs"][config["samples"][wc.sample]["ref"]]["DNA"],
     output:
-        bam=protected("{}/{{sample}}/{{sample}}.sorted.bam".format(output_d)),
-        bai=protected("{}/{{sample}}/{{sample}}.sorted.bam.bai".format(output_d)),
+        bam=protected(f"{output_d}/{{sample}}/{{sample}}.sorted.bam"),
+        bai=protected(f"{output_d}/{{sample}}/{{sample}}.sorted.bam.bai"),
     threads: 32
+    conda:
+        "Snakemake-envs/minimap2.yaml"
     resources:
         mem="128G",
         time=1439,
@@ -48,10 +48,12 @@ rule minimap2:
 rule split:
     input:
         script=config["exec"]["split"],
-        reads=lambda wildcards: config["samples"][wildcards.sample]["reads"],
-        bam="{}/{{sample}}/{{sample}}.sorted.bam".format(output_d),
+        reads=lambda wc: config["samples"][wc.sample]["reads"],
+        bam=f"{output_d}/{{sample}}/{{sample}}.sorted.bam",
     output:
-        split=directory("{}/{{sample}}/freddie.split".format(output_d)),
+        split=directory(f"{output_d}/{{sample}}/freddie.split"),
+    conda:
+        "Snakemake-envs/scFreddie.yaml"
     threads: 32
     resources:
         mem="16G",
@@ -63,9 +65,11 @@ rule split:
 rule segment:
     input:
         script=config["exec"]["segment"],
-        split="{}/{{sample}}/freddie.split".format(output_d),
+        split=f"{output_d}/{{sample}}/freddie.split",
     output:
-        segment=directory("{}/{{sample}}/freddie.segment".format(output_d)),
+        segment=directory(f"{output_d}/{{sample}}/freddie.segment"),
+    conda:
+        "Snakemake-envs/scFreddie.yaml"
     threads: 32
     resources:
         mem="32G",
@@ -77,14 +81,16 @@ rule segment:
 rule cluster:
     input:
         script=config["exec"]["cluster"],
-        segment="{}/{{sample}}/freddie.segment".format(output_d),
+        segment=f"{output_d}/{{sample}}/freddie.segment",
     output:
-        cluster=directory("{}/{{sample}}/freddie.cluster".format(output_d)),
-        logs=directory("{}/{{sample}}/freddie.cluster_logs".format(output_d)),
-        log="{}/{{sample}}/freddie.cluster.log".format(logs_d),
+        cluster=directory(f"{output_d}/{{sample}}/freddie.cluster"),
+        logs=directory(f"{output_d}/{{sample}}/freddie.cluster_logs"),
+        log=f"{logs_d}/{{sample}}/freddie.cluster.log",
     params:
         g_license=config["gurobi"]["license"],
         g_timeout=config["gurobi"]["timeout"],
+    conda:
+        "Snakemake-envs/scFreddie.yaml"
     threads: 32
     resources:
         mem="32G",
@@ -97,13 +103,60 @@ rule cluster:
 rule isoforms:
     input:
         script=config["exec"]["isoforms"],
-        split="{}/{{sample}}/freddie.split".format(output_d),
-        cluster="{}/{{sample}}/freddie.cluster".format(output_d),
+        split=f"{output_d}/{{sample}}/freddie.split",
+        cluster=f"{output_d}/{{sample}}/freddie.cluster",
     output:
-        isoforms=protected("{}/{{sample}}/freddie.isoforms.gtf".format(output_d)),
+        isoforms=protected(f"{output_d}/{{sample}}/freddie.isoforms.gtf"),
     threads: 8
     resources:
         mem="16G",
         time=359,
     shell:
         "{input.script} -s {input.split} -c {input.cluster} -o {output.isoforms} -t {threads}"
+
+
+rule scTagger_match:
+    input:
+        lr_tsv=f"{output_d}/scTagger/{{sample}}/{{sample}}.lr_bc.tsv.gz",
+        wl_tsv=f"{output_d}/scTagger/{{sample}}/{{sample}}.bc_whitelist.tsv.gz",
+    output:
+        lr_tsv=f"{output_d}/scTagger/{{sample}}/{{sample}}.lr_matches.tsv.gz",
+    threads: 32
+    conda:
+        "Snakemake-envs/sctagger.yaml"
+    shell:
+        "scTagger.py match_trie"
+        " -lr {input.lr_tsv}"
+        " -sr {input.wl_tsv}"
+        " -o {output.lr_tsv}"
+        " -t {threads}"
+
+
+rule scTagger_extract_bc:
+    input:
+        tsv=f"{output_d}/scTagger/{{sample}}/{{sample}}.lr_bc.tsv.gz",
+        wl=config["refs"]["10x_bc"],
+    output:
+        tsv=f"{output_d}/scTagger/{{sample}}/{{sample}}.bc_whitelist.tsv.gz",
+    conda:
+        "Snakemake-envs/sctagger.yaml"
+    shell:
+        "scTagger.py extract_sr_bc_from_lr"
+        " -i {input.tsv}"
+        " -wl {input.wl}"
+        " -o {output.tsv}"
+
+
+rule scTagger_lr_seg:
+    input:
+        reads=lambda wc: config["samples"][wc.sample]["reads"],
+    output:
+        tsv=f"{output_d}/scTagger/{{sample}}/{{sample}}.lr_bc.tsv.gz",
+    threads: 32
+    conda:
+        "Snakemake-envs/sctagger.yaml"
+    shell:
+        "scTagger.py extract_lr_bc"
+        " -r {input.reads}"
+        " -o {output.tsv}"
+        " -t {threads}"

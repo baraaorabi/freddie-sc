@@ -12,12 +12,13 @@ exec:
 
 samples:
     S1:
-        ref: homo_sapiens
+        ref: Homo_sapiens
         reads: output/simulate/TS/S1.fastq
         truth: output/simulate/TS/S1.tsv
 
-references:
-    homo_sapiens:
-        annot: output/refs/homo_sapiens.annot.gtf
-        genome: output/refs/homo_sapiens.dna.fa
-        genome_fai: output/refs/homo_sapiens.dna.fa.fai
+refs:
+    Homo_sapiens:
+        GTF : data/refs/homo_sapiens.annot.gtf
+        DNA : data/refs/homo_sapiens.dna.fa
+        cDNA : data/refs/homo_sapiens.cdna.fa
+    10x_bc: data/refs/3M-february-2018.txt.gz
