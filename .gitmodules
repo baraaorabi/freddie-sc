@@ -1,0 +1,3 @@
+[submodule "extern/tksm"]
+	path = extern/tksm
+	url = https://github.com/vpc-ccg/tksm

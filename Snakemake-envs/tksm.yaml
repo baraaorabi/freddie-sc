@@ -5,3 +5,5 @@ channels:
   - nodefaults
 dependencies:
   - tksm==0.3.1
+  - gxx=12.2.0
+  - cxxopts=3.1.0

@@ -234,10 +234,20 @@ else:
     def pipe(X):
         return X
 
+rule make_tksm:
+    output:
+        "extern/tksm/build/bin/tksm"
+    conda:
+        "Snakemake-envs/tksm.yaml"
+    threads:
+        32
+    shell:
+        "cd extern/tksm && make -j {threads} && ./install.sh"
 
 rule sequence:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
         fastas=lambda wc: get_sample_ref(wc.exprmnt, "DNA"),
         qscore_model=lambda wc: get_sequencer_model_input(wc, "qscore"),
         error_model=lambda wc: get_sequencer_model_input(wc, "error"),
@@ -252,7 +262,7 @@ rule sequence:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm sequence"
+        "{input.tksm} sequence"
         " -i {input.mdf}"
         " --references {params.fastas}"
         " -o {output.fastq}"
@@ -265,6 +275,7 @@ rule sequence:
 rule filter:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.Flt.mdf"),
     params:
@@ -274,7 +285,7 @@ rule filter:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm filter"
+        "{input.tksm} filter"
         " -i {input.mdf}"
         " -t {output.mdf}"
         " {params.other}"
@@ -283,6 +294,7 @@ rule filter:
 rule truncate:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
         kde=get_kde_model_input,
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.Trc.mdf"),
@@ -294,7 +306,7 @@ rule truncate:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm truncate"
+        "{input.tksm} truncate"
         " -i {input.mdf}"
         " --kde-model={params.kde}"
         " -o {output.mdf}"
@@ -304,6 +316,7 @@ rule truncate:
 rule unsegment:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.Uns.mdf"),
     params:
@@ -313,7 +326,7 @@ rule unsegment:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm unsegment"
+        "{input.tksm} unsegment"
         " -i {input.mdf}"
         " -o {output.mdf}"
         " {params.other}"
@@ -322,6 +335,7 @@ rule unsegment:
 rule shuffle:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.Shf.mdf"),
     params:
@@ -331,7 +345,7 @@ rule shuffle:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm shuffle"
+        "{input.tksm} shuffle"
         " -i {input.mdf}"
         " -o {output.mdf}"
         " {params.other}"
@@ -340,6 +354,7 @@ rule shuffle:
 rule flip:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.Flp.mdf"),
     params:
@@ -349,7 +364,7 @@ rule flip:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm flip"
+        "{input.tksm} flip"
         " -i {input.mdf}"
         " -o {output.mdf}"
         " {params.other}"
@@ -358,6 +373,7 @@ rule flip:
 rule pcr:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.PCR.mdf"),
     params:
@@ -367,7 +383,7 @@ rule pcr:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm pcr"
+        "{input.tksm} pcr"
         " -i {input.mdf}"
         " -o {output.mdf}"
         " {params.other}"
@@ -376,6 +392,7 @@ rule pcr:
 rule tag:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.Tag.mdf"),
     params:
@@ -385,7 +402,7 @@ rule tag:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm tag"
+        "{input.tksm} tag"
         " -i {input.mdf}"
         " -o {output.mdf}"
         " {params.other}"
@@ -394,6 +411,7 @@ rule tag:
 rule single_cell_barcoder:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.SCB.mdf"),
     params:
@@ -403,7 +421,7 @@ rule single_cell_barcoder:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm scb"
+        "{input.tksm} scb"
         " -i {input.mdf}"
         " -o {output.mdf}"
         " {params.other}"
@@ -412,6 +430,7 @@ rule single_cell_barcoder:
 rule polyA:
     input:
         mdf=f"{TS_d}/{{exprmnt}}/{{prefix}}.mdf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/{{prefix}}.plA.mdf"),
     params:
@@ -421,7 +440,7 @@ rule polyA:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm polyA"
+        "{input.tksm} polyA"
         " -i {input.mdf}"
         " -o {output.mdf}"
         " {params.other}"
@@ -432,6 +451,7 @@ rule transcribe:
     input:
         tsv=lambda wc: f"{preproc_d}/tksm_abundance/{get_step(wc.exprmnt, 'Tsb')['model']}.{get_step(wc.exprmnt, 'Tsb')['mode']}.tsv",
         gtf=lambda wc: get_sample_ref(wc.exprmnt, "GTF"),
+        tksm="extern/tksm/build/bin/tksm",
     output:
         mdf=pipe(f"{TS_d}/{{exprmnt}}/Tsb.mdf"),
     params:
@@ -441,7 +461,7 @@ rule transcribe:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm transcribe"
+        "{input.tksm} transcribe"
         " -a {input.tsv}"
         " -g {input.gtf}"
         " -o {output.mdf}"
@@ -474,12 +494,13 @@ else:
 rule abundance:
     input:
         paf=f"{preproc_d}/minimap2/{{sample}}.cDNA.paf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         tsv=f"{preproc_d}/tksm_abundance/{{sample}}.Xpr.tsv",
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm abundance"
+        "{input.tksm} abundance"
         " -p {input.paf}"
         " -o {output.tsv}"
 
@@ -488,12 +509,13 @@ rule abundance_sc:
     input:
         paf=f"{preproc_d}/minimap2/{{sample}}.cDNA.paf",
         lr_matches=f"{preproc_d}/scTagger/{{sample}}/{{sample}}.lr_matches.tsv.gz",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         tsv=f"{preproc_d}/tksm_abundance/{{sample}}.Xpr_sc.tsv",
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm abundance"
+        "{input.tksm} abundance"
         " -p {input.paf}"
         " -m {input.lr_matches}"
         " -o {output.tsv}"
@@ -502,6 +524,7 @@ rule abundance_sc:
 rule model_truncation:
     input:
         paf=f"{preproc_d}/minimap2/{{sample}}.cDNA.paf",
+        tksm="extern/tksm/build/bin/tksm",
     output:
         x=f"{preproc_d}/models/truncate/{{sample}}.X_idxs.npy",
         y=f"{preproc_d}/models/truncate/{{sample}}.Y_idxs.npy",
@@ -512,7 +535,7 @@ rule model_truncation:
     conda:
         "Snakemake-envs/tksm.yaml"
     shell:
-        "tksm model-truncation"
+        "{input.tksm} model-truncation"
         " -i {input.paf}"
         " -o {params.out_prefix}"
         " --threads {threads}"
