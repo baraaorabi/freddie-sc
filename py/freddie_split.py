@@ -402,15 +402,21 @@ def get_transcriptional_intervals(reads):
     return fin_multi_tints
 
 
-def split_reads(read_files, rname_to_tint, contigs, outdir, threads):
-    outfiles = {c: open("{}/{}/reads.tsv".format(outdir, c), "w+") for c in contigs}
+def split_reads(read_files, rname_to_tint, contigs, outdir, threads, sort_mem="2G"):
+    contig_aggregate_read_files = {
+        c: open("{}/{}/reads.tsv".format(outdir, c), "wt+") for c in contigs
+    }
     for read_file in read_files:
         print("[freddie_split] Splitting reads:", read_file)
         if read_file.endswith(".gz"):
             read_file_open = gzip.open(read_file, "rt")
         else:
             read_file_open = open(read_file, "r")
-        for idx, line in enumerate(read_file_open):
+        mod = 0
+        contig = None
+        tint_ids = dict()
+        rid = None
+        for idx, line in enumerate(tqdm(read_file_open, desc=f"Splitting {read_file}")):
             if idx == 0:
                 if line[0] == "@":
                     mod = 4
@@ -429,37 +435,48 @@ def split_reads(read_files, rname_to_tint, contigs, outdir, threads):
             if idx % mod == 1 and contig != None:
                 seq = line.rstrip()
                 for tint_id in tint_ids:
-                    record = list()
-                    record.append(str(rid))
-                    record.append(str(contig))
-                    record.append(str(tint_id))
-                    record.append(seq)
-                    outfiles[contig].write("\t".join(record))
-                    outfiles[contig].write("\n")
-    for outfile in outfiles.values():
+                    print(
+                        f"{rid}\t{contig}\t{tint_id}\t{seq}",
+                        file=contig_aggregate_read_files[contig],
+                    )
+
+    for outfile in contig_aggregate_read_files.values():
         outfile.close()
-    for c in contigs:
-        print("[freddie_split] Sorting contig {}...".format(c))
-        path = "{od}/{c}/reads.tsv".format(od=outdir, c=c)
-        os.system("sort -k3,3n {} > {}_sorted".format(path, path))
-        os.system("mv {}_sorted {}".format(path, path))
-        last_tint = None
-        for line in open(path):
-            rid, contig, tint_id, _ = line.rstrip().split("\t")
-            if last_tint == None:
-                last_tint = tint_id
-                outfile = open(
-                    "{}/{}/reads_{}_{}.tsv".format(outdir, c, c, tint_id), "w+"
-                )
-            if last_tint != tint_id:
-                outfile.close()
-                last_tint = tint_id
-                outfile = open(
-                    "{}/{}/reads_{}_{}.tsv".format(outdir, c, c, tint_id), "w+"
-                )
-            outfile.write(line)
+
+    with Pool(threads) as pool_threads:
+        pool_threads.starmap(
+            split_congtig_reads, [(c, outdir, sort_mem) for c in contigs]
+        )
+
+
+def split_congtig_reads(contig, outdir, sort_mem):
+    print("[freddie_split] Sorting contig {}...".format(contig))
+    path = f"{outdir}/{contig}/reads.tsv"
+    assert os.path.exists(path), path
+    os.system(f"cat {path} | sort -k3,3n --buffer-size={sort_mem} > {path}_sorted")
+    os.system(f"mv {path}_sorted {path}")
+    last_tint = None
+    outfile = gzip.open("/dev/null", "wt+")
+    reads_file = open(path, "rt")
+    line = reads_file.readline()
+    if len(line) == 0:
         outfile.close()
-        # os.remove(path)
+        return
+    _, _, tint_id, _ = line.rstrip().split("\t")
+    last_tint = tint_id
+    outfile = gzip.open(f"{outdir}/{contig}/reads_{contig}_{tint_id}.tsv.gz", "wt+")
+    outfile.write(line)
+    for line in tqdm(reads_file, desc=f"Splitting {path} reads"):
+        _, _, tint_id, _ = line.rstrip().split("\t")
+        if last_tint != tint_id:
+            outfile.close()
+            last_tint = tint_id
+            outfile = gzip.open(
+                f"{outdir}/{contig}/reads_{contig}_{tint_id}.tsv.gz", "wt+"
+            )
+        outfile.write(line)
+    outfile.close()
+    os.remove(path)
 
 
 def run_split(split_args):
@@ -480,7 +497,9 @@ def run_split(split_args):
 
 
 def write_tint(contig_outdir, contig, tint_id, tint, reads, rname_to_tint):
-    outfile = open("{}/split_{}_{}.tsv".format(contig_outdir, contig, tint_id), "w+")
+    outfile = gzip.open(
+        "{}/split_{}_{}.tsv.gz".format(contig_outdir, contig, tint_id), "wt+"
+    )
     record = list()
     record.append("#{}".format(contig))
     record.append("{}".format(tint_id))
@@ -533,7 +552,7 @@ def main():
     contigs = {
         x["SN"]
         for x in pysam.AlignmentFile(args.bam, "rb").header["SQ"]
-        if x["LN"] > args.contig_min_size
+        if x["LN"] > args.contig_min_size and len(x["SN"]) == 2
     }
     assert (
         len(contigs) > 0
@@ -551,19 +570,19 @@ def main():
         )
     rname_to_tint = dict()
     final_contigs = list()
+    threads_pool = Pool(args.threads)
     if args.threads > 1:
-        p = Pool(args.threads)
-        mapper = functools.partial(p.imap_unordered, chunksize=1)
+        mapper = functools.partial(threads_pool.imap_unordered, chunksize=1)
     else:
         mapper = map
+        threads_pool.close()
     for contig, contig_rname_to_tint in mapper(run_split, split_args):
         if len(contig_rname_to_tint) == 0:
             continue
         print("[freddie_split] Done with contig {}".format(contig))
         rname_to_tint = {**rname_to_tint, **contig_rname_to_tint}
         final_contigs.append(contig)
-    if args.threads > 1:
-        p.close()
+    threads_pool.close()
 
     RLIMIT_NOFILE_soft, RLIMIT_NOFILE_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
     if RLIMIT_NOFILE_hard < len(contigs) + 10:
