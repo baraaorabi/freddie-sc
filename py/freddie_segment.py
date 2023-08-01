@@ -1,5 +1,4 @@
 #!/usr/bin/env python3
-import functools
 from multiprocessing import Pool
 import os
 import glob
@@ -104,31 +103,27 @@ class Tint:
         # val is a list of read indices that have the same intervals
         self.read_reps: list[
             tuple[
-                tuple[ # Read intervals
-                    tuple[int, int], # (start, end)
-                    ...
-                ],  
-                list[int]] # list of read indices
+                tuple[tuple[int, int], ...], list[int]  # Read intervals  # (start, end)
+            ]  # list of read indices
         ] = list()
         # final_positions is a list of positions
         self.final_positions: list[int] = list()
         # segs is a list of tuples (start, end) of segments
-        self.segs: list[
-            tuple[int, int] # (start, end)
-        ] = list()
+        self.segs: list[tuple[int, int]] = list()  # (start, end)
         assert all(
             a[1] < b[0] for a, b in zip(self.intervals[:-1], self.intervals[1:])
         ), self.intervals
         assert all(s < e for s, e in self.intervals)
 
     def compute_read_reps(self):
-        read_reps = dict()
+        D = dict()
         for ridx, read in enumerate(self.reads):
             k = tuple(((ts, te) for ts, te, _, _, _ in read.intervals))
-            if not k in self.read_reps:
-                read_reps[k] = list()
-            read_reps[k].append(ridx)
-        self.read_reps = list(read_reps.items())
+            if not k in D:
+                D[k] = list()
+            D[k].append(ridx)
+        self.read_reps = list(D.items())
+        assert self.read_count == sum(len(x) for _, x in self.read_reps)
 
     def get_as_record(self, sep: str = "\t"):
         record = list()
@@ -285,24 +280,31 @@ def read_split(split_tsv):
         split_tsv = open(split_tsv)
     header = str(split_tsv.readline())
     tint = Tint(header)
-
     for line in split_tsv:
         read = Read(str(line))
         tint.reads.append(read)
     assert len(tint.reads) == tint.read_count
     tint.compute_read_reps()
-
     return tint
 
 
 def read_sequence(tint: Tint, reads_tsv: str):
     rid_to_seq = dict()
-    for line in open(reads_tsv):
+    if reads_tsv.endswith(".gz"):
+        infile = gzip.open(reads_tsv, "rt")
+    else:
+        infile = open(reads_tsv)
+    for line in infile:
         line = line.rstrip().split("\t")
         rid = int(line[0])
         seq = line[3]
         rid_to_seq[rid] = seq
-    assert len(rid_to_seq) == len(tint.reads), tint
+    assert len(rid_to_seq) == len(tint.reads), (
+        reads_tsv,
+        len(rid_to_seq),
+        len(tint.reads),
+        tint.reads,
+    )
     for read in tint.reads:
         read.seq = rid_to_seq[read.id]
         read.length = len(read.seq)
@@ -606,7 +608,6 @@ def get_unaligned_gaps_and_polyA(read: Read, segs):
     read.gaps = sorted(gaps)
 
 
-
 def optimize(
     candidate_y_idxs,
     C,
@@ -819,17 +820,15 @@ def run_segment(run_segment_args):
     (
         split_tsv,
         reads_tsv,
-        outdir,
-        contig,
-        tint_id,
+        segment_tsv,
     ) = run_segment_args
     tint = read_split(split_tsv)
     read_sequence(tint, reads_tsv)
     segment(tint)
-    with open(f"{outdir}/{contig}/segment_{contig}_{tint_id}.tsv", "w+") as out_file:
-        print(tint.get_as_record(), file=out_file)
+    with gzip.open(segment_tsv, "tw+") as out_file:
+        print(tint.get_as_record(), file=out_file)  # type: ignore
         for read in tint.reads:
-            print(read.get_as_record(), file=out_file)
+            print(read.get_as_record(), file=out_file)  # type: ignore
     del tint
 
 
@@ -952,22 +951,32 @@ def main():
     args.split_dir = args.split_dir.rstrip("/")
 
     segment_args = list()
-    for split_tsv in glob.iglob(f"{args.split_dir}/*/split_*.tsv*"):
+    contigs = set()
+    os.makedirs(args.outdir, exist_ok=False)
+    for split_tsv in tqdm(
+        glob.iglob(f"{args.split_dir}/*/split_*.tsv*"), desc="Finding split files"
+    ):
         # Split file name is args.split_dir/<contig>/split_<contig>_<tint_id>.(tsv|tsv.gz)
         contig, tint_id = split_tsv.split("/")[-2:]
-        tint_id = tint_id.split("_")[1].split(".")[0]
+        contigs.add(contig)
+        tint_id = tint_id.split("_")[2].split(".")[0]
         tint_id = int(tint_id)
-        reads_tsv = f"{args.split_dir}/{contig}/reads_{contig}_{tint_id}.tsv"
-        assert os.path.exists(reads_tsv), reads_tsv
+        reads_tsv = list(
+            glob.iglob(f"{args.split_dir}/{contig}/reads_{contig}_{tint_id}.tsv*")
+        )
+        assert len(reads_tsv) == 1, (reads_tsv, split_tsv)
+        reads_tsv = reads_tsv[0]
+        segment_tsv = f"{args.outdir}/{contig}/segment_{contig}_{tint_id}.tsv.gz"
         segment_args.append(
             (
                 split_tsv,
                 reads_tsv,
-                args.outdir,
-                contig,
-                tint_id,
+                segment_tsv,
             )
         )
+    segment_args = sorted(segment_args)
+    for contig in contigs:
+        os.makedirs(f"{args.outdir}/{contig}", exist_ok=False)
     with Pool(args.threads) as threads_pool:
         for _ in tqdm(
             threads_pool.imap_unordered(
