@@ -1,6 +1,7 @@
 .snakemake/
 output/
 data/
+figs/
 slurm_logs/
 gurobi.log
 

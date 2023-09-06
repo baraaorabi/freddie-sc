@@ -15,6 +15,10 @@ samples:
         ref: Homo_sapiens
         reads: output/simulate/TS/S1.fastq
         truth: output/simulate/TS/S1.tsv
+    N1:
+        ref: Homo_sapiens
+        reads: data/samples/N1.fastq
+        truth: output/simulate/TS/S1.tsv
 
 refs:
     Homo_sapiens:
