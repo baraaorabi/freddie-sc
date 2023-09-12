@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 import argparse
+from itertools import groupby
 import os
-import resource
 import re
 import functools
 from collections import deque
+from typing import Generator, NamedTuple
 from multiprocessing import Pool
 import gzip
 
@@ -16,64 +17,41 @@ import numpy as np
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description="Extract alignment information from BAM/SAM file and splits reads into distinct transcriptional intervals"
+        description="Extract alignment information from BAM/SAM file and splits reads"
+        + " into distinct transcriptional intervals",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument(
         "-b",
         "--bam",
         type=str,
         required=True,
-        help="Path to sorted and indexed BAM file of reads. Assumes splice aligner is used to the genome (e.g. minimap2 -x splice)",
-    )
-    parser.add_argument(
-        "--consider-nonspliced",
-        type=str_to_bool,
-        nargs="?",
-        const=True,
-        default=False,
-        help="Consider reads with no splicing",
-    )
-    parser.add_argument(
-        "-r",
-        "--reads",
-        nargs="+",
-        type=str,
-        required=True,
-        help="Space separated paths to reads in FASTQ or FASTA format used to extract polyA tail information. If the file ends with .gz, it will be read using gzip",
+        help="Path to sorted and indexed BAM file of reads. "
+        + " Assumes splice aligner is used to the genome (e.g. minimap2 -x splice)",
     )
     parser.add_argument(
         "-t",
         "--threads",
         default=1,
         type=int,
-        help="Number of threads. Max # of threads used is # of contigs. Default: 1",
+        help="Number of threads. Max # of threads used is # of contigs.",
     )
     parser.add_argument(
         "--contig-min-size",
         default=1_000_000,
         type=int,
-        help="Minimum contig size. Any contig with less size will not be processes. Default: 1,000,000",
+        help="Minimum contig size. Any contig with less size will not be processes.",
     )
     parser.add_argument(
         "-o",
         "--outdir",
         type=str,
         default="freddie_split/",
-        help="Path to output directory. Default: freddie_split/",
+        help="Path to output directory.",
     )
     args = parser.parse_args()
     assert args.threads > 0
     return args
-
-
-def str_to_bool(value):
-    if isinstance(value, bool):
-        return value
-    if value.lower() in {"false", "f", "0", "no", "n"}:
-        return False
-    elif value.lower() in {"true", "t", "1", "yes", "y"}:
-        return True
-    raise ValueError(f"{value} is not a valid boolean value")
 
 
 cigar_re = re.compile(r"(\d+)([M|I|D|N|S|H|P|=|X]{1})")
@@ -127,6 +105,14 @@ cop_to_str = [
     "B",
 ]
 
+TranscriptionalIntervals = NamedTuple(
+    "TranscriptionalIntervals",
+    [
+        ("intervals", list[tuple[int, int]]),
+        ("rids", list[int]),
+    ],
+)
+
 
 def fix_intervals(intervals):
     for ts, te, qs, qe, cigar in intervals:
@@ -146,10 +132,11 @@ def fix_intervals(intervals):
             yield (ts, te, qs, qe, cigar)
 
 
-# Both query and target intervals are 0-based, start inclusive, and end explusive
-# E.g. the interval 0-10 is 10bp long, includes the base at index 0 but not the base at index 10
-def get_intervals(aln, max_del_size=20):
-    cigar = aln.cigartuples
+# Both query and target intervals are 0-based, start inclusive, and end exlusive
+# E.g. the interval 0-10 is 10bp long,
+# and includes the base at index 0 but not the base at index 10
+def get_intervals(aln, max_del_size=20) -> list[tuple[int, int, int, int]]:
+    cigar: list[tuple[int, int]] = aln.cigartuples
     qstart = 0
     if cigar[0][0] == pysam.CSOFT_CLIP:
         qstart += cigar[0][1]
@@ -164,13 +151,15 @@ def get_intervals(aln, max_del_size=20):
     assert qend > qstart
 
     # aln.reference_start is 0-indexed
-    tstart = aln.reference_start
+    tstart: int = aln.reference_start
 
-    intervals = list()  # list of exonic intervals of the alignment
-    qstart_c = qstart  # current interval's start on query
-    qend_c = qstart  # current interval's end on query
-    tstart_c = tstart  # current interval's start on target
-    tend_c = tstart  # current interval's end on target
+    intervals: list[
+        tuple[int, int, int, int]
+    ] = list()  # list of exonic intervals of the alignment
+    qstart_c: int = qstart  # current interval's start on query
+    qend_c: int = qstart  # current interval's end on query
+    tstart_c: int = tstart  # current interval's start on target
+    tend_c: int = tstart  # current interval's end on target
     interval_cigar = list()  # current interval's list of cigar operations
     for t, c in cigar:
         assert 0 <= t < 10, t
@@ -194,7 +183,6 @@ def get_intervals(aln, max_del_size=20):
                     tend_c,
                     qstart_c,
                     qend_c,
-                    interval_cigar,
                 )
             )
             assert (
@@ -216,7 +204,6 @@ def get_intervals(aln, max_del_size=20):
                 tend_c,
                 qstart_c,
                 qend_c,
-                interval_cigar,
             )
         )
         assert (
@@ -227,12 +214,87 @@ def get_intervals(aln, max_del_size=20):
             sum(c for t, c in interval_cigar if t in target_consuming)
             == tend_c - tstart_c
         )
+    intervals = [
+        (st, et, sr, er) for (st, et, sr, er) in intervals if st != et and sr != er
+    ]
     return intervals
 
 
-def read_sam(sam, contig, ignore_nonspliced):
-    reads = list()
-    start, end = None, None
+def find_longest_polyA(
+    seq: str,
+    start: int,
+    end: int,
+    match_s: int = 1,
+    mismatch_s: int = -2,
+):
+    result = (0, 0, 0, 0)
+    if end - start <= 0:
+        return result
+    max_length = 0
+    for char in "AT":
+        if seq[start] == char:
+            scores = [match_s]
+        else:
+            scores = [0]
+        for m in (match_s if c == char else mismatch_s for c in seq[start + 1 : end]):
+            scores.append(max(0, scores[-1] + m))
+
+        for is_positive, g in groupby(enumerate(scores), lambda x: x[1] > 0):
+            if not is_positive:
+                continue
+            idxs, cur_scores = list(zip(*g))
+            _, last_idx = max(zip(cur_scores, idxs))
+            last_idx += 1
+            first_idx = idxs[0]
+            length = last_idx - first_idx
+            if length > max_length:
+                max_length = length
+                result = (
+                    0,  # target start, target being polyA
+                    length,  # target end
+                    first_idx,  # query start
+                    last_idx,  # query end
+                )
+    return result
+
+
+class Read:
+    def __init__(
+        self,
+        idx: int,
+        strand: str,
+        intervals: list[tuple[int, int, int, int]],
+    ):
+        self.idx = idx
+        self.strand = strand
+        self.intervals = intervals
+
+    def compute_polyA_intervals(self, seq: str):
+        self.left_polyA = find_longest_polyA(seq, 0, self.query_start())
+        self.right_polyA = find_longest_polyA(seq, self.query_end(), len(seq))
+
+    def target_start(self):
+        return self.intervals[0][0]
+
+    def target_end(self):
+        return self.intervals[-1][1]
+
+    def query_start(self):
+        return self.intervals[0][2]
+
+    def query_end(self):
+        return self.intervals[-1][3]
+
+
+def overlapping_reads(
+    sam_path: str, contig: str, names_outpath: str
+) -> Generator[dict[int, Read], None, None]:
+    sam = pysam.AlignmentFile(sam_path, "rb")
+    reads: dict[int, Read] = dict()
+    start: int = -1
+    end: int = -1
+    ridx = 0
+    names_outfile = gzip.open(names_outpath, "tw+")
     for aln in sam.fetch(contig=contig):
         if (
             aln.is_unmapped
@@ -241,42 +303,32 @@ def read_sam(sam, contig, ignore_nonspliced):
             or aln.reference_name == None
         ):
             continue
-        assert aln.reference_name == contig, "{} : {}".format(
-            aln.reference_name, contig
-        )
-        read = dict(
-            id=len(reads),
-            name=aln.query_name,
-            contig=aln.reference_name,
+        read = Read(
+            idx=ridx,
             strand="-" if aln.is_reverse else "+",
-            simple_tints=list(),
-            tint=None,
-            intervals=[
-                (st, et, sr, er, c)
-                for (st, et, sr, er, c) in get_intervals(aln)
-                if st != et and sr != er
-            ],
+            intervals=get_intervals(aln),
         )
-        if ignore_nonspliced and len(read["intervals"]) == 1:
-            continue
-        s, _, _, _, _ = read["intervals"][0]
-        _, e, _, _, _ = read["intervals"][-1]
-        if (start, end) == (None, None):
+        ridx += 1
+        print(aln.query_name, file=names_outfile)  # type: ignore
+        read.compute_polyA_intervals(aln.query_sequence)  # type: ignore
+        s = read.target_start()
+        e = read.target_end()
+        if (start, end) == (-1, -1):
             start, end = s, e
         if s > end:
             yield reads
-            reads = list()
-            read["id"] = len(reads)
+            reads = dict()
             end = e
         end = max(end, e)
-        reads.append(read)
+        reads[read.idx] = read
     if len(reads) > 0:
         yield reads
+    names_outfile.close()
 
 
 def break_tint(tint, reads):
-    rids = tint["rids"]
-    intervals = tint["intervals"]
+    rids = tint.rids
+    intervals = tint.intervals
     start = intervals[0][0]
     end = intervals[-1][1]
     pos_to_intrv = np.zeros(end - start, dtype=int)
@@ -326,220 +378,139 @@ def break_tint(tint, reads):
             )
 
 
-def get_transcriptional_intervals(reads):
-    intervals = list()
-    start, end = None, None
-    rids = list()
+def get_transcriptional_intervals(reads: dict[int, Read]) -> list[TranscriptionalIntervals]:
+    BasicInterval = NamedTuple(
+        "BasicInterval",
+        [
+            ("start", int),
+            ("end", int),
+            ("rids", list[int]),
+        ],
+    )
+
+    bintervals: list[BasicInterval] = list()
+    start, end = -1, -1
+    bint_rids: list[int] = list()
+    rid_to_bints: dict[int, list[int]] = {read.idx: list() for read in reads.values()}
     for s, e, rid in sorted(
-        (i[0], i[1], read["id"]) for read in reads for i in read["intervals"]
+        (ts, te, read.idx) for read in reads.values() for (ts, te, _, _) in read.intervals
     ):
-        if (start, end) == (None, None):
+        if (start, end) == (-1, -1):
             start, end = s, e
         if s > end:
-            intervals.append(
-                dict(
-                    tint=-1,
+            bintervals.append(
+                BasicInterval(
                     start=start,
                     end=end,
-                    rids=rids,
+                    rids=bint_rids,
                 )
             )
             start = s
             end = e
-            rids = list()
+            bint_rids = list()
         assert start <= s
         end = max(end, e)
-        rids.append(rid)
-        reads[rid]["simple_tints"].append(len(intervals))
-    if (start, end) == (None, None):
+        bint_rids.append(rid)
+        rid_to_bints[rid].append(len(bintervals))
+    if (start, end) == (-1, -1):
         return list()
-    intervals.append(
-        dict(
-            tint=-1,
+    bintervals.append(
+        BasicInterval(
             start=start,
             end=end,
-            rids=rids,
+            rids=bint_rids,
         )
     )
 
-    enqueued = [False for _ in intervals]
-    multi_tints = list()
-    for idx in range(len(intervals)):
-        if enqueued[idx]:
+    enqueued = [False for _ in bintervals]
+    tints: list[TranscriptionalIntervals] = list()
+    bint_idx: int
+    # Breadth-first search
+    for bint_idx in range(len(bintervals)):
+        if enqueued[bint_idx]:
             continue
-        group = list()
-        queue = deque()
-        queue.append(idx)
-        enqueued[idx] = True
+        group: list[int] = list()
+        queue: deque[int] = deque()
+        queue.append(bint_idx)
+        enqueued[bint_idx] = True
         while len(queue) > 0:
-            tint = queue.pop()
-            group.append(tint)
-            for rid in intervals[tint]["rids"]:
-                for i in reads[rid]["simple_tints"]:
-                    if not enqueued[i]:
-                        enqueued[i] = True
-                        queue.append(i)
-        rids = set()
-        group_intervals = list()
-        for tint in group:
-            rids.update(intervals[tint]["rids"])
-            group_intervals.append((intervals[tint]["start"], intervals[tint]["end"]))
-        if len(rids) < 3:
-            continue
-        # for rid in rids:
-        #     reads[rid]['tint'] = len(multi_tints)
-        multi_tints.append(dict(intervals=sorted(group_intervals), rids=sorted(rids)))
-    assert all(enqueued)
-    fin_multi_tints = list()
-    for tint in multi_tints:
-        if len(tint["intervals"]) < 100 and len(tint["rids"]) < 1500:
-            fin_multi_tints.append(tint)
-        else:
-            X = 0
-            for t in break_tint(tint, reads):
-                X += 1
-                fin_multi_tints.append(t)
-    return fin_multi_tints
-
-
-def split_reads(read_files, rname_to_tint, contigs, outdir, threads, sort_mem="2G"):
-    contig_aggregate_read_files = {
-        c: open("{}/{}/reads.tsv".format(outdir, c), "wt+") for c in contigs
-    }
-    for read_file in read_files:
-        print("[freddie_split] Splitting reads:", read_file)
-        if read_file.endswith(".gz"):
-            read_file_open = gzip.open(read_file, "rt")
-        else:
-            read_file_open = open(read_file, "r")
-        mod = 0
-        contig = None
-        tint_ids = dict()
-        rid = None
-        for idx, line in enumerate(tqdm(read_file_open, desc=f"Splitting {read_file}")):
-            if idx == 0:
-                if line[0] == "@":
-                    mod = 4
-                elif line[0] == ">":
-                    mod = 2
-                else:
-                    assert False, "Invalid fasta/q file " + read_file
-            if idx % mod == 0:
-                rname = line.rstrip().split()[0][1:]
-                if rname in rname_to_tint:
-                    contig = rname_to_tint[rname]["contig"]
-                    rid = rname_to_tint[rname]["rid"]
-                    tint_ids = rname_to_tint[rname]["tint_ids"]
-                else:
-                    contig = None
-            if idx % mod == 1 and contig != None:
-                seq = line.rstrip()
-                for tint_id in tint_ids:
-                    print(
-                        f"{rid}\t{contig}\t{tint_id}\t{seq}",
-                        file=contig_aggregate_read_files[contig],
-                    )
-
-    for outfile in contig_aggregate_read_files.values():
-        outfile.close()
-
-    with Pool(threads) as pool_threads:
-        pool_threads.starmap(
-            split_congtig_reads, [(c, outdir, sort_mem) for c in contigs]
-        )
-
-
-def split_congtig_reads(contig, outdir, sort_mem):
-    print("[freddie_split] Sorting contig {}...".format(contig))
-    path = f"{outdir}/{contig}/reads.tsv"
-    assert os.path.exists(path), path
-    os.system(f"cat {path} | sort -k3,3n --buffer-size={sort_mem} > {path}_sorted")
-    os.system(f"mv {path}_sorted {path}")
-    last_tint = None
-    outfile = gzip.open("/dev/null", "wt+")
-    reads_file = open(path, "rt")
-    line = reads_file.readline()
-    if len(line) == 0:
-        outfile.close()
-        return
-    _, _, tint_id, _ = line.rstrip().split("\t")
-    last_tint = tint_id
-    outfile = gzip.open(f"{outdir}/{contig}/reads_{contig}_{tint_id}.tsv.gz", "wt+")
-    outfile.write(line)
-    for line in tqdm(reads_file, desc=f"Splitting {path} reads"):
-        _, _, tint_id, _ = line.rstrip().split("\t")
-        if last_tint != tint_id:
-            outfile.close()
-            last_tint = tint_id
-            outfile = gzip.open(
-                f"{outdir}/{contig}/reads_{contig}_{tint_id}.tsv.gz", "wt+"
+            bint_idx = queue.pop()
+            group.append(bint_idx)
+            for rid in bintervals[bint_idx].rids:
+                for bint_idx in rid_to_bints[rid]:
+                    if not enqueued[bint_idx]:
+                        enqueued[bint_idx] = True
+                        queue.append(bint_idx)
+        tint_rids: set[int] = set()
+        group_intervals: list[tuple[int, int]] = list()
+        for bint_idx in group:
+            tint_rids.update(bintervals[bint_idx].rids)
+            group_intervals.append(
+                (bintervals[bint_idx].start, bintervals[bint_idx].end)
             )
-        outfile.write(line)
-    outfile.close()
-    os.remove(path)
+        # if len(tint_rids) < 3:
+        #     continue
+        tints.append(
+            TranscriptionalIntervals(
+                intervals=sorted(group_intervals),
+                rids=sorted(tint_rids),
+            )
+        )
+    assert all(enqueued)
+    return tints
 
 
-def run_split(split_args):
-    bam, contig, ignore_nonspliced, outdir = split_args
-    sam = pysam.AlignmentFile(bam, "rb")
-    rname_to_tint = dict()
-    tint_id = 0
-    contig_outdir = "{}/{}".format(outdir, contig)
-    for reads in read_sam(sam=sam, contig=contig, ignore_nonspliced=ignore_nonspliced):
+def run_split(split_args: tuple[str, str, str]):
+    sam_path, contig, outdir = split_args
+    os.makedirs(outdir, exist_ok=True)
+    names_outpath = f"{outdir}/{contig}.read_names.txt.gz"
+    tints_outfile = gzip.open(f"{outdir}/{contig}.split.tsv.gz", "tw+")
+    tint_idx = 0
+    for reads in overlapping_reads(
+        sam_path=sam_path,
+        contig=contig,
+        names_outpath=names_outpath,
+    ):
         tints = get_transcriptional_intervals(reads=reads)
         for tint in tints:
-            if tint_id == 0:
-                print("[freddie_split] Splitting contig {}".format(contig))
-                os.makedirs(contig_outdir, exist_ok=False)
-            write_tint(contig_outdir, contig, tint_id, tint, reads, rname_to_tint)
-            tint_id += 1
-    return contig, rname_to_tint
+            write_tint(
+                tint,
+                tint_idx,
+                reads,
+                contig,
+                tints_outfile,  # type: ignore
+            )
+            tint_idx += 1
+    return contig
 
 
-def write_tint(contig_outdir, contig, tint_id, tint, reads, rname_to_tint):
-    outfile = gzip.open(
-        "{}/split_{}_{}.tsv.gz".format(contig_outdir, contig, tint_id), "wt+"
-    )
+def write_tint(
+    tint: TranscriptionalIntervals,
+    tint_idx: int,
+    reads: dict[int, Read],
+    contig: str,
+    outfile,
+):
     record = list()
-    record.append("#{}".format(contig))
-    record.append("{}".format(tint_id))
-    record.append(",".join("{}-{}".format(s, e) for s, e in tint["intervals"]))
-    record.append(str(len(tint["rids"])))
-    outfile.write("\t".join(record))
-    outfile.write("\n")
-    for rid in tint["rids"]:
-        read = reads[rid]
-        if not read["name"] in rname_to_tint:
-            rname_to_tint[read["name"]] = dict(contig=contig, rid=rid, tint_ids=list())
-        assert rname_to_tint[read["name"]]["contig"] == contig
-        assert rname_to_tint[read["name"]]["rid"] == rid, (
-            contig,
-            rid,
-            read["name"],
-            rname_to_tint[read["name"]]["rid"],
-        )
-        rname_to_tint[read["name"]]["tint_ids"].append(tint_id)
-        record = list()
-        record.append(str(read["id"]))
-        record.append(read["name"])
-        record.append(read["contig"])
-        record.append(read["strand"])
-        record.append(str(tint_id))
-        for interval in read["intervals"]:
-            record.append(parse_interval_field(interval))
-        outfile.write("\t".join(record))
-        outfile.write("\n")
-    outfile.close()
-
-
-def parse_interval_field(interval):
-    return "{}-{}:{}-{}:{}".format(
-        interval[0],
-        interval[1],
-        interval[2],
-        interval[3],
-        "".join(("{}{}".format(c, cop_to_str[t]) for t, c in interval[4])),
+    record.append(f"#{contig}")
+    record.append(f"{tint_idx}")
+    record.append(f"{len(tint.rids)}")
+    record.append(",".join(f"{s}-{e}" for s, e in tint.intervals))
+    print(
+        "\t".join(record),
+        file=outfile,  # type: ignore
     )
+    for rid in tint.rids:
+        read = reads[rid]
+        record = list()
+        record.append(f"{read.idx}")
+        record.append(f"{read.strand}")
+        for ts, te, qs, qe in [read.left_polyA, read.right_polyA] + read.intervals:
+            record.append(f"{ts}-{te}:{qs}-{qe}")
+        print(
+            "\t".join(record),
+            file=outfile,  # type: ignore
+        )
 
 
 def main():
@@ -551,8 +522,8 @@ def main():
 
     contigs = {
         x["SN"]
-        for x in pysam.AlignmentFile(args.bam, "rb").header["SQ"]
-        if x["LN"] > args.contig_min_size and len(x["SN"]) == 2
+        for x in pysam.AlignmentFile(args.bam, "rb").header["SQ"]  # type: ignore
+        if x["LN"] > args.contig_min_size
     }
     assert (
         len(contigs) > 0
@@ -564,44 +535,22 @@ def main():
             (
                 args.bam,
                 contig,
-                not args.consider_nonspliced,
                 args.outdir,
             )
         )
-    rname_to_tint = dict()
-    final_contigs = list()
     threads_pool = Pool(args.threads)
     if args.threads > 1:
         mapper = functools.partial(threads_pool.imap_unordered, chunksize=1)
     else:
         mapper = map
         threads_pool.close()
-    for contig, contig_rname_to_tint in mapper(run_split, split_args):
-        if len(contig_rname_to_tint) == 0:
-            continue
-        print("[freddie_split] Done with contig {}".format(contig))
-        rname_to_tint = {**rname_to_tint, **contig_rname_to_tint}
-        final_contigs.append(contig)
+    for contig in tqdm(
+        mapper(run_split, split_args),
+        total=len(contigs),
+        desc="Spliting contigs into transcriptional intervals",
+    ):
+        pass
     threads_pool.close()
-
-    RLIMIT_NOFILE_soft, RLIMIT_NOFILE_hard = resource.getrlimit(resource.RLIMIT_NOFILE)
-    if RLIMIT_NOFILE_hard < len(contigs) + 10:
-        assert (
-            False
-        ), "Number of contigs in reference is much larger than system hard limit on open files! {} vs {}".format(
-            len(contigs), RLIMIT_NOFILE_hard
-        )
-    if RLIMIT_NOFILE_soft < len(contigs) + 10:
-        resource.setrlimit(
-            resource.RLIMIT_NOFILE, (len(contigs) + 10, RLIMIT_NOFILE_hard)
-        )
-    split_reads(
-        read_files=args.reads,
-        rname_to_tint=rname_to_tint,
-        contigs=final_contigs,
-        outdir=args.outdir,
-        threads=args.threads,
-    )
 
 
 if __name__ == "__main__":
