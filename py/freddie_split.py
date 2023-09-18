@@ -262,10 +262,12 @@ class Read:
     def __init__(
         self,
         idx: int,
+        name: str,
         strand: str,
         intervals: list[tuple[int, int, int, int]],
     ):
         self.idx = idx
+        self.name = name
         self.strand = strand
         self.intervals = intervals
 
@@ -305,6 +307,7 @@ def overlapping_reads(
             continue
         read = Read(
             idx=ridx,
+            name=aln.query_name,  # type: ignore
             strand="-" if aln.is_reverse else "+",
             intervals=get_intervals(aln),
         )
@@ -378,7 +381,9 @@ def break_tint(tint, reads):
             )
 
 
-def get_transcriptional_intervals(reads: dict[int, Read]) -> list[TranscriptionalIntervals]:
+def get_transcriptional_intervals(
+    reads: dict[int, Read]
+) -> list[TranscriptionalIntervals]:
     BasicInterval = NamedTuple(
         "BasicInterval",
         [
@@ -393,7 +398,9 @@ def get_transcriptional_intervals(reads: dict[int, Read]) -> list[Transcriptiona
     bint_rids: list[int] = list()
     rid_to_bints: dict[int, list[int]] = {read.idx: list() for read in reads.values()}
     for s, e, rid in sorted(
-        (ts, te, read.idx) for read in reads.values() for (ts, te, _, _) in read.intervals
+        (ts, te, read.idx)
+        for read in reads.values()
+        for (ts, te, _, _) in read.intervals
     ):
         if (start, end) == (-1, -1):
             start, end = s, e
@@ -504,6 +511,7 @@ def write_tint(
         read = reads[rid]
         record = list()
         record.append(f"{read.idx}")
+        record.append(f"{read.name}")
         record.append(f"{read.strand}")
         for ts, te, qs, qe in [read.left_polyA, read.right_polyA] + read.intervals:
             record.append(f"{ts}-{te}:{qs}-{qe}")
