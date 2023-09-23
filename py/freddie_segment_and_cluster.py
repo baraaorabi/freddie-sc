@@ -440,9 +440,7 @@ class canonInts:
         heights_ax = axes[0, 0]
         imshow_ax = axes[1, 0]
         fig.subplots_adjust(hspace=0)
-        heights = (
-            [0] + [interval.end - interval.start for interval in self.intervals] + [0]
-        )
+        heights = [0] + [interval.end - interval.start for interval in self.intervals] + [0]
         heights_ax.bar(
             np.arange(0, len(heights), 1),
             heights,
@@ -474,12 +472,12 @@ class canonInts:
             f"Read index (n={len(self.rids)}, u={unique_read_count})", size=10
         )
         imshow_ax.set_xlabel("Interval index", size=10)
-        starts = (
-            [0]
-            + [interval.start for interval in self.intervals]
-            + [self.intervals[-1].end]
+        starts = [0] + [interval.start for interval in self.intervals] + [
+            self.intervals[-1].end
+        ] 
+        xticks = np.arange(
+            1, len(starts), max(1, len(starts) // 30)
         )
-        xticks = np.arange(1, len(starts), max(1, len(starts) // 30))
         if xticks[-1] != len(starts) - 1:
             xticks = np.append(xticks, len(starts) - 1)
         imshow_ax.set_xticks(xticks - 0.5)
