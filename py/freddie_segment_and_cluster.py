@@ -133,13 +133,81 @@ class Read:
 
 
 class canonInts:
+    """
+    A class to represent a set of canoninal intervals of a set of read alignments
+
+    Attributes
+    ----------
+    intervals : list[canonInts.cinterval]
+        list of intervals
+    matrix : npt.NDArray[np.uint8]
+        matrix representation of the intervals
+
+    Methods
+    -------
+    make_cintervals(reads: list[Read]) -> list[canonInts.cinterval]
+        make the intervals from a list of reads
+    extend(recompute_matrix=True)
+        extend the first/last exons of the reads as far as no intron of another read is crossed
+    compress(recompute_matrix=True)
+        merge adjacent intervals with the same sets of reads
+    substring(i: typing.Union[int, None], j: typing.Union[int, None]) -> canonInts
+        return a new canonInts object with the intervals i to j
+    split_on_freq(min_freq=0.50) -> tuple[canonInts, canonInts]
+        split the intervals on the frequency of the reads
+    get_matrix() -> npt.NDArray[np.uint8]
+        return the matrix representation of the intervals
+    compute_matrix()
+        builds the matrix representation of the intervals
+    pop(min_len, extend=True, compress=True, recompute_matrix=True)
+        remove intervals shorter than min_len
+    """
+
     class intType(enum.IntEnum):
+        """
+        An enum to represent the type of an interval
+        """
+
         unaln = 0
         intron = 1
         exon = 3
         polyA = 2
 
     class cinterval:
+        """
+        A class to represent a single canonical interval
+
+        Attributes
+        ----------
+        start : int
+            start position of the interval
+        end : int
+            end position of the interval
+        _type_to_rids : dict[canonInts.intType, set[int]]
+            dictionary mapping the type alignment to the set of reads
+            with that type of alignment on the interval
+        _rid_to_type : dict[int, canonInts.intType]
+            dictionary mapping the read id to the type of alignment it
+            has on the interval
+
+        Methods
+        -------
+        add_rid(rid: int, t: canonInts.intType)
+            add a read with a type of alignment to the interval
+        add_rids(rids: typing.Iterable[int], t: canonInts.intType)
+            add a set of reads with a type of alignment to the interval
+        intronic_rids() -> set[int]
+            return the set of reads with an intronic alignment on the interval
+        exonic_rids() -> set[int]
+            return the set of reads with an exonic alignment on the interval
+        rids() -> set[int]
+            return the set of reads with an alignment on the interval
+        change_rid_type(rid: int, t: canonInts.intType)
+            change the type of alignment of a read on the interval
+        change_rids_type(rids: set[int], t: canonInts.intType)
+            change the type of alignment of a set of reads on the interval
+        """
+
         def __init__(self, start: int, end: int) -> None:
             self.start = start
             self.end = end
@@ -149,29 +217,90 @@ class canonInts:
             self._rid_to_type: dict[int, canonInts.intType] = dict()
 
         def add_rid(self, rid: int, t: "canonInts.intType"):
+            """
+            Add a read with a type of alignment to the interval
+
+            Parameters
+            ----------
+            rid : int
+                read id
+            t : canonInts.intType
+                type of alignment
+            """
             self._type_to_rids[t].add(rid)
             self._rid_to_type[rid] = t
 
         def add_rids(self, rids: typing.Iterable[int], t: "canonInts.intType"):
+            """
+            Add a set of reads with a type of alignment to the interval
+
+            Parameters
+            ----------
+            rids : set[int]
+                read ids
+            t : canonInts.intType
+                type of alignment
+            """
             for rid in rids:
                 self.add_rid(rid, t)
 
         def intronic_rids(self) -> set[int]:
+            """
+            Return the set of reads with an intronic alignment on the interval
+
+            Returns
+            -------
+            set[int]
+            """
             return self._type_to_rids[canonInts.intType.intron]
 
         def exonic_rids(self) -> set[int]:
+            """
+            Return the set of reads with an exonic alignment on the interval
+
+            Returns
+            -------
+            set[int]
+            """
             return self._type_to_rids[canonInts.intType.exon]
 
         def rids(self) -> set[int]:
+            """
+            Return the set of reads with an alignment on the interval
+
+            Returns
+            -------
+            set[int]
+            """
             return set(self._rid_to_type.keys())
 
         def change_rid_type(self, rid: int, t: "canonInts.intType") -> None:
+            """
+            Change the type of alignment of a read on the interval
+
+            Parameters
+            ----------
+            rid : int
+                read id
+            t : canonInts.intType
+                type of target alignment
+            """
             old_t = self._rid_to_type.get(rid, canonInts.intType.unaln)
             self._type_to_rids[old_t].discard(rid)
             self._type_to_rids[t].add(rid)
             self._rid_to_type[rid] = t
 
         def change_rids_type(self, rids: set[int], t: "canonInts.intType") -> None:
+            """
+            Change the type of alignment of a set of reads on the interval
+
+            Parameters
+            ----------
+            rids : set[int]
+                read ids
+            t : canonInts.intType
+                type of target alignment
+            """
             for rid in rids:
                 self.change_rid_type(rid, t)
 
@@ -199,6 +328,19 @@ class canonInts:
 
     @staticmethod
     def make_cintervals(reads: list[Read]) -> list["canonInts.cinterval"]:
+        """
+        Make the canonical intervals from a list of reads
+
+        Parameters
+        ----------
+        reads : list[Read]
+            list of reads
+
+        Returns
+        -------
+        list[canonInts.cinterval]:
+            list of canonical intervals of the reads
+        """
         result: list[canonInts.cinterval] = list()
         breakpoints_set: set[int] = set()
         g = cgranges.cgranges()
@@ -239,9 +381,16 @@ class canonInts:
                     cint.change_rid_type(read.rid, canonInts.intType.intron)
         return result
 
-    # extend the first/last exons of the reads
-    # as far as no intron of another read is crossed
     def extend(self, recompute_matrix=True):
+        """
+        Extend the first/last exons of the reads as far as no intron of another read is crossed
+
+        Parameters
+        ----------
+        recompute_matrix : bool, optional (default=True)
+            if True recompute the matrix representation of the intervals
+        """
+
         def do_extend(intervals: list[canonInts.cinterval]):
             for idx, curr_cint in enumerate(self.intervals[:-1]):
                 next_cint = intervals[idx + 1]
@@ -264,8 +413,15 @@ class canonInts:
         if recompute_matrix:
             self.compute_matrix()
 
-    # merge adjacent intervals with the same sets of reads
     def compress(self, recompute_matrix=True):
+        """
+        Merge adjacent intervals with the same sets of reads
+
+        Parameters
+        ----------
+        recompute_matrix : bool, optional (default=True)
+            if True recompute the matrix representation of the intervals
+        """
         result: list[canonInts.cinterval] = list()
         last = self.intervals[0]
         for curr in self.intervals[1:]:
@@ -292,12 +448,42 @@ class canonInts:
         i: typing.Union[int, None],
         j: typing.Union[int, None],
     ) -> "canonInts":
+        """
+        Return a new canonInts object with the intervals i to j
+
+        Parameters
+        ----------
+        i : int
+            start index of the interval
+        j : int
+            end index of the interval
+
+        Returns
+        -------
+        canonInts
+        """
+
         rids = set()
         for interval in self.intervals[i:j]:
             rids.update(interval.rids())
         return canonInts(self._all_reads, rids)
 
     def split_on_freq(self, min_freq=0.50) -> tuple["canonInts", "canonInts"]:
+        """
+        Split the intervals on the frequency of the reads alignment type per interval.
+        Any read with a frequency of alignment type below min_freq on any interval is dropped.
+
+        Parameters
+        ----------
+        min_freq : float, optional (default=0.50)
+            minimum frequency of alignment type
+
+        Returns
+        -------
+        tuple[canonInts, canonInts]
+            tuple of two canonInts objects, the first with the reads above the threshold
+            on every interval and the second with the reads below the threshold on any interval
+        """
         drop_rids = set()
         for interval in self.intervals:
             interval_read_count = len(interval.rids())
@@ -312,12 +498,25 @@ class canonInts:
         return keep_cints, drop_cints
 
     def get_matrix(self) -> npt.NDArray[np.uint8]:
+        """
+        Return the matrix representation of the intervals.
+        If the matrix is was never computed, it will be computed before being returned.
+
+        Returns
+        -------
+        npt.NDArray[np.uint8]
+            matrix representation of the intervals
+        """
         if self.matrix.shape[0] == 0:
             self.compute_matrix()
         return self.matrix
 
-    # convert the intervals to a matrix
     def compute_matrix(self):
+        """
+        Builds the matrix representation of the intervals. The matrix is stored in self.matrix.
+        The integer representation is defined by canonInts.intType.
+        The matrix includes two additional columns for the polyA start and end at the beginning and end of the matrix.
+        """
         self.matrix = np.full(
             (
                 len(self.rids),
@@ -339,11 +538,28 @@ class canonInts:
             if read.polyA_end:
                 self.matrix[i, -1] = canonInts.intType.polyA
 
-    # remove intervals shorter than min_len
-    # if extend run extend() at the end
-    # if compress run compress() at the end
-    # if recompute_matrix recompute the matrix at the end
     def pop(self, min_len, extend=True, compress=True, recompute_matrix=True):
+        """
+        Remove intervals shorter than min_len.
+        The method first finds neighbouhoods of intervals shorter than min_len.
+        If the neighbourhood is a single interval, it is extended to the left or right
+        depending on which side has the lowest cost (number of reads with a different alignment type).
+        If the neighbourhood is multiple intervals, the intervals of the neighbourhood are merged into a single new interval.
+        The reads of the new interval are the union of the reads of the neighbourhood and the type of alignment of each read
+        is determined by the alignment type with the highest total length on the interval for that read.
+
+        Parameters
+        ----------
+        min_len : int
+            minimum length of an interval below which the interval is removed/merged
+        extend : bool, optional (default=True)
+            if True run extend(recompute_matrix=False) at the end of the method
+        compress : bool, optional (default=True)
+            if True run compress(recompute_matrix=False) at the end of the method
+        recompute_matrix : bool, optional (default=True)
+            if True recompute the matrix representation of the intervals at the end of the method
+        """
+
         def enum_cint_len(args: tuple[int, canonInts.cinterval]):
             _, cint = args
             return cint.end - cint.start
@@ -422,6 +638,18 @@ class canonInts:
         min_height: int = 5,
         out_prefix: typing.Union[str, None] = None,
     ):
+        """
+        Plot the intervals and the matrix representation of the intervals using matplotlib's imshow
+
+        Parameters
+        ----------
+        unique : bool, optional (default=True)
+            if True plot only unique rows of the matrix
+        min_height : int, optional (default=5)
+            intervals shorter than min_height are plotted in red, otherwise in blue
+        out_prefix : str, optional (default=None)
+            if not None save the plot to out_prefix.png and out_prefix.pdf
+        """
         fig, axes = plt.subplots(
             2,
             2,
@@ -440,7 +668,9 @@ class canonInts:
         heights_ax = axes[0, 0]
         imshow_ax = axes[1, 0]
         fig.subplots_adjust(hspace=0)
-        heights = [0] + [interval.end - interval.start for interval in self.intervals] + [0]
+        heights = (
+            [0] + [interval.end - interval.start for interval in self.intervals] + [0]
+        )
         heights_ax.bar(
             np.arange(0, len(heights), 1),
             heights,
@@ -472,12 +702,12 @@ class canonInts:
             f"Read index (n={len(self.rids)}, u={unique_read_count})", size=10
         )
         imshow_ax.set_xlabel("Interval index", size=10)
-        starts = [0] + [interval.start for interval in self.intervals] + [
-            self.intervals[-1].end
-        ] 
-        xticks = np.arange(
-            1, len(starts), max(1, len(starts) // 30)
+        starts = (
+            [0]
+            + [interval.start for interval in self.intervals]
+            + [self.intervals[-1].end]
         )
+        xticks = np.arange(1, len(starts), max(1, len(starts) // 30))
         if xticks[-1] != len(starts) - 1:
             xticks = np.append(xticks, len(starts) - 1)
         imshow_ax.set_xticks(xticks - 0.5)
@@ -510,6 +740,19 @@ class canonInts:
 
 
 def generate_tint_lines(split_dir: str) -> Generator[list[str], None, None]:
+    """
+    Generator of the lines of the split tsv files
+
+    Parameters
+    ----------
+    split_dir : str
+        linux path (with wildcards) to the split tsv files
+
+    Yields
+    ------
+    list[str]
+        list of lines for each transcriptional intervals (tint) in the split tsv files
+    """
     for split_tsv in glob.iglob(f"{split_dir}/*.split.tsv*"):
         if split_tsv.endswith(".gz"):
             infile = gzip.open(split_tsv, "rt")
@@ -528,6 +771,14 @@ def generate_tint_lines(split_dir: str) -> Generator[list[str], None, None]:
 
 
 def segment_and_cluster(tint_lines: list[str]):
+    """
+    Segment and cluster a set of transcriptional intervals (tint) lines
+
+    Parameters
+    ----------
+    tint_lines : list[str]
+        list of lines for each transcriptional intervals (tint)
+    """
     tint = Tint(tint_lines)
     del tint_lines
     cints = canonInts(tint.reads)

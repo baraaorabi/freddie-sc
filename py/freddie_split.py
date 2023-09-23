@@ -115,6 +115,15 @@ TranscriptionalIntervals = NamedTuple(
 
 
 def fix_intervals(intervals):
+    """
+    Fixes intervals by removing any intervals with 0 length
+    and merging any overlapping intervals
+
+    Parameters
+    ----------
+    intervals : list[tuple[int, int, int, int]]
+        List of intervals of the alignment.
+    """
     for ts, te, qs, qe, cigar in intervals:
         if len(cigar) == 0:
             continue
@@ -132,10 +141,21 @@ def fix_intervals(intervals):
             yield (ts, te, qs, qe, cigar)
 
 
-# Both query and target intervals are 0-based, start inclusive, and end exlusive
-# E.g. the interval 0-10 is 10bp long,
-# and includes the base at index 0 but not the base at index 10
 def get_intervals(aln, max_del_size=20) -> list[tuple[int, int, int, int]]:
+    """
+    Returns a list of intervals of the alignment.
+    Each interval is a tuple of (target_start, target_end, query_start, query_end)
+    Both target and query intervals are 0-based, start inclusive, and end exlusive
+    E.g. the interval 0-10 is 10bp long,
+    and includes the base at index 0 but not the base at index 10.
+
+    Parameters
+    ----------
+    aln : pysam.AlignedSegment
+        pysam AlignedSegment object
+    max_del_size : int, optional
+        Maximum deletion, by default 20bp. Deletions longer than this will be treated as target skips (cigar N)
+    """
     cigar: list[tuple[int, int]] = aln.cigartuples
     qstart = 0
     if cigar[0][0] == pysam.CSOFT_CLIP:
@@ -227,6 +247,22 @@ def find_longest_polyA(
     match_s: int = 1,
     mismatch_s: int = -2,
 ):
+    """
+    Finds the longest polyA in the sequence.
+
+    Parameters
+    ----------
+    seq : str
+        Sequence
+    start : int
+        Search start index (inclusive)
+    end : int
+        Search end index (exclusive)
+    match_s : int, optional
+        Score for matching base, by default 1
+    mismatch_s : int, optional
+        Score for mismatching base, by default -2
+    """
     result = (0, 0, 0, 0)
     if end - start <= 0:
         return result
@@ -259,19 +295,41 @@ def find_longest_polyA(
 
 
 class Read:
+    """
+    Read object
+
+    Attributes
+    ----------
+    idx : int
+        Read index
+    name : str
+        Read name
+    strand : str
+        Read strand
+    intervals : list[tuple[int, int, int, int]]
+        List of intervals of the read
+        Each interval is a tuple of (target_start, target_end, query_start, query_end)
+        Both target and query intervals are 0-based, start inclusive, and end exlusive
+        E.g. the interval 0-10 is 10bp long,
+        and includes the base at index 0 but not the base at index 10.
+    left_polyA : tuple[int, int, int, int]
+        Left polyA interval
+    right_polyA : tuple[int, int, int, int]
+        Right polyA interval
+    """
+
     def __init__(
         self,
         idx: int,
         name: str,
         strand: str,
         intervals: list[tuple[int, int, int, int]],
+        seq: str,
     ):
         self.idx = idx
         self.name = name
         self.strand = strand
         self.intervals = intervals
-
-    def compute_polyA_intervals(self, seq: str):
         self.left_polyA = find_longest_polyA(seq, 0, self.query_start())
         self.right_polyA = find_longest_polyA(seq, self.query_end(), len(seq))
 
@@ -291,6 +349,24 @@ class Read:
 def overlapping_reads(
     sam_path: str, contig: str, names_outpath: str
 ) -> Generator[dict[int, Read], None, None]:
+    """
+    Generator of reads overlapping with the contig
+
+    Parameters
+    ----------
+    sam_path : str
+        Path to SAM/BAM file
+    contig : str
+        Contig name
+    names_outpath : str
+        Path to output file of read names
+
+    Yields
+    ------
+    Generator[dict[int, Read], None, None]
+        Each generation is a dictionary of reads where any two reads that
+        overlap will be in the same dictionary
+    """
     sam = pysam.AlignmentFile(sam_path, "rb")
     reads: dict[int, Read] = dict()
     start: int = -1
@@ -310,10 +386,10 @@ def overlapping_reads(
             name=aln.query_name,  # type: ignore
             strand="-" if aln.is_reverse else "+",
             intervals=get_intervals(aln),
+            seq=aln.query_sequence,  # type: ignore
         )
         ridx += 1
         print(aln.query_name, file=names_outfile)  # type: ignore
-        read.compute_polyA_intervals(aln.query_sequence)  # type: ignore
         s = read.target_start()
         e = read.target_end()
         if (start, end) == (-1, -1):
@@ -329,61 +405,21 @@ def overlapping_reads(
     names_outfile.close()
 
 
-def break_tint(tint, reads):
-    rids = tint.rids
-    intervals = tint.intervals
-    start = intervals[0][0]
-    end = intervals[-1][1]
-    pos_to_intrv = np.zeros(end - start, dtype=int)
-    pos_to_intrv[:] = len(intervals)
-    intrv_to_rids = [set() for _ in intervals]
-    rid_to_intrvs = {rid: set() for rid in rids}
-    for idx, (s, e) in enumerate(intervals):
-        pos_to_intrv[s - start : e - start] = idx
-    edges = dict()
-    for rid in rids:
-        read = reads[rid]
-        alns = read["intervals"]
-        for aln in alns:
-            s = aln[0]
-            v1 = pos_to_intrv[s - start]
-            intrv_to_rids[v1].add(rid)
-            rid_to_intrvs[rid].add(v1)
-        for a1, a2 in zip(alns[:-1], alns[1:]):
-            junc_start = a1[1]
-            junc_end = a2[0]
-            v1 = pos_to_intrv[junc_start - start - 1]
-            v2 = pos_to_intrv[junc_end - start]
-            assert v1 <= v2 < len(intervals), (
-                junc_start,
-                junc_end,
-                v1,
-                v2,
-            )
-            edges[(v1, v2)] = edges.get((v1, v2), 0) + 1
-
-    graph_edges = [(u, v) for (u, v), w in edges.items() if w >= 2]
-    G = nx.Graph()
-    G.add_nodes_from(range(len(intervals)))
-    G.add_edges_from(graph_edges)
-    for c in nx.connected_components(G):
-        c_rids = set()
-        for i in c:
-            c_rids.update(intrv_to_rids[i])
-        if len(c_rids) > 2:
-            rid_intrvs = set()
-            for rid in c_rids:
-                rid_intrvs.update(rid_to_intrvs[rid])
-            rid_intrvs = sorted(rid_intrvs)
-            yield dict(
-                intervals=[intervals[i] for i in rid_intrvs],
-                rids=sorted(c_rids),
-            )
-
-
 def get_transcriptional_intervals(
     reads: dict[int, Read]
 ) -> list[TranscriptionalIntervals]:
+    """
+    Returns a list of connected transcriptional intervals from a list of reads
+
+    Parameters
+    ----------
+    reads : dict[int, Read]
+        Dictionary of reads
+
+    Returns
+    -------
+    list[TranscriptionalIntervals]
+    """
     BasicInterval = NamedTuple(
         "BasicInterval",
         [
@@ -467,7 +503,20 @@ def get_transcriptional_intervals(
     return tints
 
 
-def run_split(split_args: tuple[str, str, str]):
+def run_split(split_args: tuple[str, str, str]) -> str:
+    """
+    Run the splitting stage on a given contig
+
+    Parameters
+    ----------
+    split_args: tuple[str, str, str]
+        A tuple denoting (sam_path, contig, outdir)
+
+    Returns
+    -------
+    str:
+        The contig given as a parameter
+    """
     sam_path, contig, outdir = split_args
     os.makedirs(outdir, exist_ok=True)
     names_outpath = f"{outdir}/{contig}.read_names.txt.gz"
@@ -498,6 +547,22 @@ def write_tint(
     contig: str,
     outfile,
 ):
+    """
+    Write a transcriptional interval to file
+
+    Parameters
+    ----------
+    tint : TranscriptionalIntervals
+        Transcriptional interval
+    tint_idx : int
+
+    reads : dict[int, Read]
+        Dictionary of reads
+    contig : str
+        Contig name
+    outfile : file
+        Output file
+    """
     record = list()
     record.append(f"#{contig}")
     record.append(f"{tint_idx}")
