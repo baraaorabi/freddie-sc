@@ -21,7 +21,10 @@ import cgranges
 
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="Cluster aligned reads into isoforms")
+    parser = argparse.ArgumentParser(
+        description="Cluster aligned reads into isoforms",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
     parser.add_argument(
         "-s",
         "--split-dir",
@@ -34,14 +37,14 @@ def parse_args():
         "--outdir",
         type=str,
         default="freddie_segment/",
-        help="Path to output directory. Default: freddie_segment/",
+        help="Path to output directory.",
     )
     parser.add_argument(
         "-t",
         "--threads",
         type=int,
         default=1,
-        help="Number of threads for multiprocessing. Default: 1",
+        help="Number of threads for multiprocessing.",
     )
     args = parser.parse_args()
     args.split_dir.rstrip("/")
@@ -163,7 +166,7 @@ class canonInts:
         remove intervals shorter than min_len
     """
 
-    class intType(enum.IntEnum):
+    class aln_type(enum.IntEnum):
         """
         An enum to represent the type of an interval
         """
@@ -183,18 +186,18 @@ class canonInts:
             start position of the interval
         end : int
             end position of the interval
-        _type_to_rids : dict[canonInts.intType, set[int]]
+        _type_to_rids : dict[canonInts.aln_type, set[int]]
             dictionary mapping the type alignment to the set of reads
             with that type of alignment on the interval
-        _rid_to_type : dict[int, canonInts.intType]
+        _rid_to_type : dict[int, canonInts.aln_type]
             dictionary mapping the read id to the type of alignment it
             has on the interval
 
         Methods
         -------
-        add_rid(rid: int, t: canonInts.intType)
+        add_rid(rid: int, t: canonInts.aln_type)
             add a read with a type of alignment to the interval
-        add_rids(rids: typing.Iterable[int], t: canonInts.intType)
+        add_rids(rids: typing.Iterable[int], t: canonInts.aln_type)
             add a set of reads with a type of alignment to the interval
         intronic_rids() -> set[int]
             return the set of reads with an intronic alignment on the interval
@@ -202,21 +205,21 @@ class canonInts:
             return the set of reads with an exonic alignment on the interval
         rids() -> set[int]
             return the set of reads with an alignment on the interval
-        change_rid_type(rid: int, t: canonInts.intType)
+        change_rid_type(rid: int, t: canonInts.aln_type)
             change the type of alignment of a read on the interval
-        change_rids_type(rids: set[int], t: canonInts.intType)
+        change_rids_type(rids: set[int], t: canonInts.aln_type)
             change the type of alignment of a set of reads on the interval
         """
 
         def __init__(self, start: int, end: int) -> None:
             self.start = start
             self.end = end
-            self._type_to_rids: dict[canonInts.intType, set[int]] = {
-                t: set() for t in canonInts.intType
+            self._type_to_rids: dict[canonInts.aln_type, set[int]] = {
+                t: set() for t in canonInts.aln_type
             }
-            self._rid_to_type: dict[int, canonInts.intType] = dict()
+            self._rid_to_type: dict[int, canonInts.aln_type] = dict()
 
-        def add_rid(self, rid: int, t: "canonInts.intType"):
+        def add_rid(self, rid: int, t: "canonInts.aln_type"):
             """
             Add a read with a type of alignment to the interval
 
@@ -224,13 +227,13 @@ class canonInts:
             ----------
             rid : int
                 read id
-            t : canonInts.intType
+            t : canonInts.aln_type
                 type of alignment
             """
             self._type_to_rids[t].add(rid)
             self._rid_to_type[rid] = t
 
-        def add_rids(self, rids: typing.Iterable[int], t: "canonInts.intType"):
+        def add_rids(self, rids: typing.Iterable[int], t: "canonInts.aln_type"):
             """
             Add a set of reads with a type of alignment to the interval
 
@@ -238,7 +241,7 @@ class canonInts:
             ----------
             rids : set[int]
                 read ids
-            t : canonInts.intType
+            t : canonInts.aln_type
                 type of alignment
             """
             for rid in rids:
@@ -252,7 +255,7 @@ class canonInts:
             -------
             set[int]
             """
-            return self._type_to_rids[canonInts.intType.intron]
+            return self._type_to_rids[canonInts.aln_type.intron]
 
         def exonic_rids(self) -> set[int]:
             """
@@ -262,7 +265,7 @@ class canonInts:
             -------
             set[int]
             """
-            return self._type_to_rids[canonInts.intType.exon]
+            return self._type_to_rids[canonInts.aln_type.exon]
 
         def rids(self) -> set[int]:
             """
@@ -274,7 +277,7 @@ class canonInts:
             """
             return set(self._rid_to_type.keys())
 
-        def change_rid_type(self, rid: int, t: "canonInts.intType") -> None:
+        def change_rid_type(self, rid: int, t: "canonInts.aln_type") -> None:
             """
             Change the type of alignment of a read on the interval
 
@@ -282,15 +285,15 @@ class canonInts:
             ----------
             rid : int
                 read id
-            t : canonInts.intType
+            t : canonInts.aln_type
                 type of target alignment
             """
-            old_t = self._rid_to_type.get(rid, canonInts.intType.unaln)
+            old_t = self._rid_to_type.get(rid, canonInts.aln_type.unaln)
             self._type_to_rids[old_t].discard(rid)
             self._type_to_rids[t].add(rid)
             self._rid_to_type[rid] = t
 
-        def change_rids_type(self, rids: set[int], t: "canonInts.intType") -> None:
+        def change_rids_type(self, rids: set[int], t: "canonInts.aln_type") -> None:
             """
             Change the type of alignment of a set of reads on the interval
 
@@ -298,7 +301,7 @@ class canonInts:
             ----------
             rids : set[int]
                 read ids
-            t : canonInts.intType
+            t : canonInts.aln_type
                 type of target alignment
             """
             for rid in rids:
@@ -366,19 +369,19 @@ class canonInts:
             for _, _, ridx_label in g.overlap("", start, end):
                 rid = reads[abs(ridx_label) - 1].rid
                 if ridx_label > 0:
-                    cint.add_rid(rid, canonInts.intType.exon)
+                    cint.add_rid(rid, canonInts.aln_type.exon)
                     rid_to_f[rid] = min(rid_to_f[rid], cint_idx)
                     rid_to_l[rid] = max(rid_to_l[rid], cint_idx)
                 else:
-                    cint.add_rid(rid, canonInts.intType.intron)
+                    cint.add_rid(rid, canonInts.aln_type.intron)
             result.append(cint)
         for read in reads:
             if read.polyA_start:
                 for cint in result[: rid_to_f[read.rid]]:
-                    cint.change_rid_type(read.rid, canonInts.intType.intron)
+                    cint.change_rid_type(read.rid, canonInts.aln_type.intron)
             if read.polyA_end:
                 for cint in result[rid_to_l[read.rid] + 1 :]:
-                    cint.change_rid_type(read.rid, canonInts.intType.intron)
+                    cint.change_rid_type(read.rid, canonInts.aln_type.intron)
         return result
 
     def extend(self, recompute_matrix=True):
@@ -404,7 +407,7 @@ class canonInts:
                     continue
                 # expands the reads ending at the end of the current interval
                 for rid in curr_cint.exonic_rids():
-                    next_cint.change_rid_type(rid, canonInts.intType.exon)
+                    next_cint.change_rid_type(rid, canonInts.aln_type.exon)
 
         do_extend(self.intervals)
         self.intervals.reverse()
@@ -436,8 +439,8 @@ class canonInts:
                     start=last.start,
                     end=curr.end,
                 )
-                last.add_rids(curr.intronic_rids(), canonInts.intType.intron)
-                last.add_rids(curr.exonic_rids(), canonInts.intType.exon)
+                last.add_rids(curr.intronic_rids(), canonInts.aln_type.intron)
+                last.add_rids(curr.exonic_rids(), canonInts.aln_type.exon)
         result.append(last)
         self.intervals = result
         if recompute_matrix:
@@ -514,7 +517,7 @@ class canonInts:
     def compute_matrix(self):
         """
         Builds the matrix representation of the intervals. The matrix is stored in self.matrix.
-        The integer representation is defined by canonInts.intType.
+        The integer representation is defined by canonInts.aln_type.
         The matrix includes two additional columns for the polyA start and end at the beginning and end of the matrix.
         """
         self.matrix = np.full(
@@ -522,7 +525,7 @@ class canonInts:
                 len(self.rids),
                 len(self.intervals) + 2,
             ),
-            canonInts.intType.unaln,
+            canonInts.aln_type.unaln,
             dtype=np.uint8,
         )
         rid_to_idx = {rid: idx for idx, rid in enumerate(self.rids)}
@@ -534,9 +537,9 @@ class canonInts:
             i = rid_to_idx[rid]
             read = self._all_reads[self.rid_to_ridx[rid]]
             if read.polyA_start:
-                self.matrix[i, 0] = canonInts.intType.polyA
+                self.matrix[i, 0] = canonInts.aln_type.polyA
             if read.polyA_end:
-                self.matrix[i, -1] = canonInts.intType.polyA
+                self.matrix[i, -1] = canonInts.aln_type.polyA
 
     def pop(self, min_len, extend=True, compress=True, recompute_matrix=True):
         """
@@ -604,13 +607,13 @@ class canonInts:
                 for interval in self.intervals[idxs[0] : idxs[-1] + 1]:
                     length = interval.end - interval.start
                     for rid in interval.exonic_rids():
-                        counter[rid][canonInts.intType.exon] += length
+                        counter[rid][canonInts.aln_type.exon] += length
                     for rid in interval.intronic_rids():
-                        counter[rid][canonInts.intType.intron] += length
+                        counter[rid][canonInts.aln_type.intron] += length
                 for rid in counter:
                     if (
-                        counter[rid][canonInts.intType.exon]
-                        > counter[rid][canonInts.intType.intron]
+                        counter[rid][canonInts.aln_type.exon]
+                        > counter[rid][canonInts.aln_type.intron]
                     ):
                         exonic_rids.add(rid)
                     else:
@@ -619,9 +622,9 @@ class canonInts:
                     start=start,
                     end=end,
                 )
-                self.intervals[idxs[0]].add_rids(exonic_rids, canonInts.intType.exon)
+                self.intervals[idxs[0]].add_rids(exonic_rids, canonInts.aln_type.exon)
                 self.intervals[idxs[0]].add_rids(
-                    intronic_rids, canonInts.intType.intron
+                    intronic_rids, canonInts.aln_type.intron
                 )
                 drop_idxs.update(idxs[1:])
         self.intervals = [x for i, x in enumerate(self.intervals) if i not in drop_idxs]
@@ -632,6 +635,34 @@ class canonInts:
         if recompute_matrix:
             self.compute_matrix()
 
+    # def read_gap_slack(self, rid: int, quantization: int = 10) -> tuple[tuple[int, int, int], ...]:
+    #     read = self._all_reads[self.rid_to_ridx[rid]]
+
+    #     breakpoints_set: set[int] = set()
+    #     g = cgranges.cgranges()
+    #     for ri_idx, (_, _, start, end) in enumerate(read.intervals, start=1):
+    #         g.add("", start, end, -ri_idx)
+    #         breakpoints_set.add(start)
+    #         breakpoints_set.add(end)
+    #     for ci_idx, interval in enumerate(self.intervals, start=1):
+    #         g.add("", interval.start, interval.end, ci_idx)
+    #         breakpoints_set.add(interval.start)
+    #         breakpoints_set.add(interval.end)
+    #     g.index()
+    #     breakpoints: list[int] = sorted(breakpoints_set)
+    #     for start, end in zip(breakpoints[:-1], breakpoints[1:]):
+    #         labels = tuple(g.overlap("", start, end))
+    #         for _, _, label in g.overlap("", start, end):
+    #             rid = reads[abs(ridx_label) - 1].rid
+    #             if ridx_label > 0:
+    #                 cint.add_rid(rid, canonInts.aln_type.exon)
+    #                 rid_to_f[rid] = min(rid_to_f[rid], cint_idx)
+    #                 rid_to_l[rid] = max(rid_to_l[rid], cint_idx)
+    #             else:
+    #                 cint.add_rid(rid, canonInts.aln_type.intron)
+    #         result.append(cint)
+
+        return tuple()
     def plot(
         self,
         unique: bool = True,
