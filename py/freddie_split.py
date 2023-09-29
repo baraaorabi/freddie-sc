@@ -185,7 +185,6 @@ def get_intervals(aln, max_del_size=20) -> list[paired_interval]:
                     cigar=cur_cigar,
                 )
             )
-            print(qend - qstart, tend - tstart)
         qstart = qend
         tstart = tend
     final_intervals: list[paired_interval] = list()
@@ -209,7 +208,6 @@ def get_intervals(aln, max_del_size=20) -> list[paired_interval]:
                 if op in [CIGAR_OPS_SIMPLE.target, CIGAR_OPS_SIMPLE.both]
             )
         ), (qe - qs, S)
-        print(interval)
         for op, l in cigar:
             if op == CIGAR_OPS_SIMPLE.both:
                 break
@@ -241,7 +239,7 @@ def find_longest_polyA(
     end: int,
     match_s: int = 1,
     mismatch_s: int = -2,
-):
+) -> paired_interval:
     """
     Finds the longest polyA in the sequence.
 
@@ -257,6 +255,12 @@ def find_longest_polyA(
         Score for matching base, by default 1
     mismatch_s : int, optional
         Score for mismatching base, by default -2
+
+    Returns
+    -------
+    paired_interval
+        Paired interval of the longest polyA on the
+        target (a sequence of As or Ts) and the query (the given seq)
     """
     result = paired_interval(0, 0, 0, 0)
     if end - start <= 0:
@@ -324,8 +328,19 @@ class Read:
         self.name = name
         self.strand = strand
         self.intervals = intervals
-        self.left_polyA = find_longest_polyA(seq, 0, self.query_start())
-        self.right_polyA = find_longest_polyA(seq, self.query_end(), len(seq))
+        polyA_interval = find_longest_polyA(seq, 0, len(seq))
+        if polyA_interval.te - polyA_interval.ts >= 10:
+            slack = len(seq) - polyA_interval.qe
+            self.left_polyA = f"1:{slack}"
+        else:
+            self.left_polyA = f"0:{len(seq)}"
+
+        polyA_interval = find_longest_polyA(seq, self.query_end(), len(seq))
+        if polyA_interval.te - polyA_interval.ts >= 10:
+            slack = polyA_interval.qs - self.query_end()
+            self.right_polyA = f"1:{slack}"
+        else:
+            self.right_polyA = f"0:{len(seq)}"
 
     def target_start(self):
         return self.intervals[0][0]
@@ -570,7 +585,9 @@ def write_tint(
         record.append(f"{read.idx}")
         record.append(f"{read.name}")
         record.append(f"{read.strand}")
-        for I in [read.left_polyA, read.right_polyA] + read.intervals:
+        record.append(f"{read.left_polyA}")
+        record.append(f"{read.right_polyA}")
+        for I in read.intervals:
             record.append(f"{I.ts}-{I.te}:{I.qs}-{I.qe}")
         print(
             "\t".join(record),
