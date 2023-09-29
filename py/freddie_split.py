@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 import argparse
+import enum
 from itertools import groupby
 import os
-import re
 import functools
-from collections import deque
+from collections import Counter, deque
 from typing import Generator, NamedTuple
 from multiprocessing import Pool
 import gzip
@@ -54,56 +54,32 @@ def parse_args():
     return args
 
 
-cigar_re = re.compile(r"(\d+)([M|I|D|N|S|H|P|=|X]{1})")
+class CIGAR_OPS_SIMPLE(enum.IntEnum):
+    both = 0
+    target = 1
+    query = 2
 
-query_consuming = [
-    pysam.CINS,
-    pysam.CSOFT_CLIP,
-    pysam.CMATCH,
-    pysam.CEQUAL,
-    pysam.CDIFF,
-]
-target_consuming = [
-    pysam.CDEL,
-    pysam.CMATCH,
-    pysam.CEQUAL,
-    pysam.CDIFF,
-]
-exon_consuming = [
-    pysam.CINS,
-    pysam.CDEL,
-    pysam.CMATCH,
-    pysam.CEQUAL,
-    pysam.CDIFF,
-]
-intron_consuming = [
-    pysam.CINS,
-    pysam.CDEL,
-    pysam.CMATCH,
-    pysam.CEQUAL,
-    pysam.CDIFF,
-]
-target_and_query_consuming = [
-    pysam.CMATCH,
-    pysam.CEQUAL,
-    pysam.CDIFF,
-]
-target_skipping = [
-    pysam.CDEL,
-    pysam.CREF_SKIP,
-]
-cop_to_str = [
-    "M",
-    "I",
-    "D",
-    "N",
-    "S",
-    "H",
-    "P",
-    "=",
-    "X",
-    "B",
-]
+
+paired_interval = NamedTuple(
+    "paired_interval",
+    [
+        ("qs", int),
+        ("qe", int),
+        ("ts", int),
+        ("te", int),
+    ],
+)
+
+op_simply: dict[int, CIGAR_OPS_SIMPLE] = {
+    pysam.CSOFT_CLIP: CIGAR_OPS_SIMPLE.query,
+    pysam.CINS: CIGAR_OPS_SIMPLE.query,
+    pysam.CDEL: CIGAR_OPS_SIMPLE.target,
+    pysam.CREF_SKIP: CIGAR_OPS_SIMPLE.target,
+    pysam.CMATCH: CIGAR_OPS_SIMPLE.both,
+    pysam.CDIFF: CIGAR_OPS_SIMPLE.both,
+    pysam.CEQUAL: CIGAR_OPS_SIMPLE.both,
+}
+
 
 TranscriptionalIntervals = NamedTuple(
     "TranscriptionalIntervals",
@@ -114,130 +90,149 @@ TranscriptionalIntervals = NamedTuple(
 )
 
 
-def fix_intervals(intervals):
+def canonize_cigar(
+    cigartuples: list[tuple[int, int]]
+) -> list[tuple[CIGAR_OPS_SIMPLE, int]]:
     """
-    Fixes intervals by removing any intervals with 0 length
-    and merging any overlapping intervals
+    Canonizes CIGAR tuples by combining operations of the same type and sorting them.
+    - all operations are simplified to target-consuming, query-consuming,
+      or both-consuming operations.
+    - operations between any group (of one or more) both-consuming operations are sorted by their type
+    - operations of the same type within each group are sum-combined into a single operation of the same type
+    For example, the CIGAR (10M, 20I, 5D, 5I, 5D, 10M) is canonized to (10M, 30I, 10D, 10M).
+    These un-canonical CIGARS are rare but they are produced sometimes by Minimap2:
+    (https://github.com/lh3/minimap2/issues/1118).
 
     Parameters
     ----------
-    intervals : list[tuple[int, int, int, int]]
-        List of intervals of the alignment.
+    cigartuples : list[tuple[int, int]]
+        List of CIGAR tuples (operation, length) as produced by pysam AlignedSegment.cigartuples
     """
-    for ts, te, qs, qe, cigar in intervals:
-        if len(cigar) == 0:
-            continue
-        (t, c) = cigar[0]
-        if t == pysam.CDEL:
-            ts += c
-            cigar = cigar[1:]
-        if len(cigar) == 0:
-            continue
-        (t, c) = cigar[-1]
-        if t == pysam.CDEL:
-            te -= c
-            cigar = cigar[:-1]
-        if ts < te:
-            yield (ts, te, qs, qe, cigar)
+    simple_cigartuples = [(op_simply[op], l) for op, l in cigartuples]
+    canonized_cigar: list[tuple[CIGAR_OPS_SIMPLE, int]] = list()
+    for _, g in groupby(
+        simple_cigartuples, key=lambda x: x[0] == CIGAR_OPS_SIMPLE.both
+    ):
+        C: Counter[CIGAR_OPS_SIMPLE] = Counter()
+        for op, l in g:
+            C[op] += l
+        for op, l in sorted(C.items()):
+            if l > 0:
+                canonized_cigar.append((op, l))
+    return canonized_cigar
 
 
-def get_intervals(aln, max_del_size=20) -> list[tuple[int, int, int, int]]:
+def get_intervals(aln, max_del_size=20) -> list[paired_interval]:
     """
     Returns a list of intervals of the alignment.
     Each interval is a tuple of (target_start, target_end, query_start, query_end)
     Both target and query intervals are 0-based, start inclusive, and end exlusive
-    E.g. the interval 0-10 is 10bp long,
-    and includes the base at index 0 but not the base at index 10.
+    E.g. the interval 0-10 is 10bp long and includes the base at index 0 but not the base at index 10.
+    Note: the CIGARs are first canonized using canonize_cigar() function.
 
     Parameters
     ----------
     aln : pysam.AlignedSegment
         pysam AlignedSegment object
     max_del_size : int, optional
-        Maximum deletion, by default 20bp. Deletions longer than this will be treated as target skips (cigar N)
+        Maximum deletion, by default 20bp. Target skipping cigars (N, D) longer than this will
+        trigger a split of the alignment into multiple intervals.
     """
-    cigar: list[tuple[int, int]] = aln.cigartuples
+    cigartuples: list[tuple[int, int]] = list(aln.cigartuples)
+    cigar = canonize_cigar(cigartuples)
     qstart = 0
-    if cigar[0][0] == pysam.CSOFT_CLIP:
-        qstart += cigar[0][1]
     qlen = 0
-    for t, c in cigar:
-        if t in query_consuming:
-            qlen += c
+    for op, l in cigar:
+        if op in [CIGAR_OPS_SIMPLE.query, CIGAR_OPS_SIMPLE.both]:
+            qlen += l
     assert qlen == len(aln.query_sequence)
-    qend = qlen
-    if cigar[-1][0] == pysam.CSOFT_CLIP:
-        qend -= cigar[-1][1]
-    assert qend > qstart
+    p_interval_wc = NamedTuple(
+        "paired_interval_with_cigar",
+        [
+            ("qs", int),
+            ("qe", int),
+            ("ts", int),
+            ("te", int),
+            ("cigar", list[tuple[CIGAR_OPS_SIMPLE, int]]),
+        ],
+    )
+    intervals: list[p_interval_wc] = list()  # list of exonic intervals of the alignment
 
-    # aln.reference_start is 0-indexed
-    tstart: int = aln.reference_start
-
-    intervals: list[
-        tuple[int, int, int, int]
-    ] = list()  # list of exonic intervals of the alignment
-    qstart_c: int = qstart  # current interval's start on query
-    qend_c: int = qstart  # current interval's end on query
-    tstart_c: int = tstart  # current interval's start on target
-    tend_c: int = tstart  # current interval's end on target
-    interval_cigar = list()  # current interval's list of cigar operations
-    for t, c in cigar:
-        assert 0 <= t < 10, t
-        # Treat any deletion (cigar D) longer than max_del_size as a target skip (cigar N)
-        if t == pysam.CDEL and c > max_del_size:
-            t = pysam.CREF_SKIP
-        if t in exon_consuming:
-            interval_cigar.append((t, c))
-        if t == pysam.CDEL:
-            tend_c += c
-        elif t == pysam.CINS:
-            qend_c += c
-        elif t in target_and_query_consuming:
-            tend_c += c
-            qend_c += c
-        # End of the current interval
-        if t == pysam.CREF_SKIP:
+    qstart: int = 0  # current interval's start on query
+    qend: int = 0  # current interval's end on query
+    tstart: int = aln.reference_start  # aln.reference_start is 0-indexed
+    tend: int = tstart  # current interval's end on target
+    for is_splice, g in groupby(
+        cigar,
+        key=lambda x: x[0] == CIGAR_OPS_SIMPLE.target and x[1] > max_del_size,
+    ):
+        cur_cigar = list(g)
+        for op, l in cur_cigar:
+            if op == CIGAR_OPS_SIMPLE.query:
+                qend += l
+            elif op == CIGAR_OPS_SIMPLE.target:
+                tend += l
+            elif op == CIGAR_OPS_SIMPLE.both:
+                qend += l
+                tend += l
+        if not is_splice:
             intervals.append(
-                (
-                    tstart_c,
-                    tend_c,
-                    qstart_c,
-                    qend_c,
+                p_interval_wc(
+                    ts=tstart,
+                    te=tend,
+                    qs=qstart,
+                    qe=qend,
+                    cigar=cur_cigar,
                 )
             )
-            assert (
-                sum(c for t, c in interval_cigar if t in query_consuming)
-                == qend_c - qstart_c
+            print(qend - qstart, tend - tstart)
+        qstart = qend
+        tstart = tend
+    final_intervals: list[paired_interval] = list()
+    for interval in intervals:
+        qs = interval.qs
+        qe = interval.qe
+        ts = interval.ts
+        te = interval.te
+        cigar = interval.cigar
+        assert qe - qs == (
+            S := sum(
+                l
+                for op, l in cigar
+                if op in [CIGAR_OPS_SIMPLE.query, CIGAR_OPS_SIMPLE.both]
             )
-            assert (
-                sum(c for t, c in interval_cigar if t in target_consuming)
-                == tend_c - tstart_c
+        ), (qe - qs, S)
+        assert te - ts == (
+            S := sum(
+                l
+                for op, l in cigar
+                if op in [CIGAR_OPS_SIMPLE.target, CIGAR_OPS_SIMPLE.both]
             )
-            interval_cigar = list()
-            tend_c += c
-            tstart_c = tend_c
-            qstart_c = qend_c
-    if tstart_c < tend_c:
-        intervals.append(
-            (
-                tstart_c,
-                tend_c,
-                qstart_c,
-                qend_c,
+        ), (qe - qs, S)
+        print(interval)
+        for op, l in cigar:
+            if op == CIGAR_OPS_SIMPLE.both:
+                break
+            if op == CIGAR_OPS_SIMPLE.query:
+                qs += l
+            elif op == CIGAR_OPS_SIMPLE.target:
+                ts += l
+        for op, l in cigar[::-1]:
+            if op == CIGAR_OPS_SIMPLE.both:
+                break
+            if op == CIGAR_OPS_SIMPLE.query:
+                qe -= l
+            elif op == CIGAR_OPS_SIMPLE.target:
+                te -= l
+        final_intervals.append(
+            paired_interval(
+                qs=qs,
+                qe=qe,
+                ts=ts,
+                te=te,
             )
         )
-        assert (
-            sum(c for t, c in interval_cigar if t in query_consuming)
-            == qend_c - qstart_c
-        )
-        assert (
-            sum(c for t, c in interval_cigar if t in target_consuming)
-            == tend_c - tstart_c
-        )
-    intervals = [
-        (st, et, sr, er) for (st, et, sr, er) in intervals if st != et and sr != er
-    ]
-    return intervals
+    return final_intervals
 
 
 def find_longest_polyA(
@@ -263,7 +258,7 @@ def find_longest_polyA(
     mismatch_s : int, optional
         Score for mismatching base, by default -2
     """
-    result = (0, 0, 0, 0)
+    result = paired_interval(0, 0, 0, 0)
     if end - start <= 0:
         return result
     max_length = 0
@@ -285,11 +280,11 @@ def find_longest_polyA(
             length = last_idx - first_idx
             if length > max_length:
                 max_length = length
-                result = (
-                    0,  # target start, target being polyA
-                    length,  # target end
-                    first_idx,  # query start
-                    last_idx,  # query end
+                result = paired_interval(
+                    ts=0,
+                    te=length,
+                    qs=first_idx,
+                    qe=last_idx,
                 )
     return result
 
@@ -306,12 +301,11 @@ class Read:
         Read name
     strand : str
         Read strand
-    intervals : list[tuple[int, int, int, int]]
+    intervals : list[paired_interval]
         List of intervals of the read
-        Each interval is a tuple of (target_start, target_end, query_start, query_end)
+        Each interval is a paired_interval namedtuple of (target_start, target_end, query_start, query_end)
         Both target and query intervals are 0-based, start inclusive, and end exlusive
-        E.g. the interval 0-10 is 10bp long,
-        and includes the base at index 0 but not the base at index 10.
+        E.g. the interval 0-10 is 10bp long, and includes the base at index 0 but not the base at index 10.
     left_polyA : tuple[int, int, int, int]
         Left polyA interval
     right_polyA : tuple[int, int, int, int]
@@ -323,7 +317,7 @@ class Read:
         idx: int,
         name: str,
         strand: str,
-        intervals: list[tuple[int, int, int, int]],
+        intervals: list[paired_interval],
         seq: str,
     ):
         self.idx = idx
@@ -434,9 +428,7 @@ def get_transcriptional_intervals(
     bint_rids: list[int] = list()
     rid_to_bints: dict[int, list[int]] = {read.idx: list() for read in reads.values()}
     for s, e, rid in sorted(
-        (ts, te, read.idx)
-        for read in reads.values()
-        for (ts, te, _, _) in read.intervals
+        (I.ts, I.te, read.idx) for read in reads.values() for I in read.intervals
     ):
         if (start, end) == (-1, -1):
             start, end = s, e
@@ -578,8 +570,8 @@ def write_tint(
         record.append(f"{read.idx}")
         record.append(f"{read.name}")
         record.append(f"{read.strand}")
-        for ts, te, qs, qe in [read.left_polyA, read.right_polyA] + read.intervals:
-            record.append(f"{ts}-{te}:{qs}-{qe}")
+        for I in [read.left_polyA, read.right_polyA] + read.intervals:
+            record.append(f"{I.ts}-{I.te}:{I.qs}-{I.qe}")
         print(
             "\t".join(record),
             file=outfile,  # type: ignore
