@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 from collections import Counter, defaultdict
 import enum
-import functools
 from itertools import groupby
 from multiprocessing import Pool
 import os
@@ -100,10 +99,14 @@ class Tint:
 
 
 class Read:
-    class PolyA:
-        def __init__(self, length: int, slack: int):
-            self.length = length
-            self.slack = slack
+    polyA_t = typing.NamedTuple(
+        "polyA_t",
+        [
+            ("overhang", int),
+            ("length", int),
+            ("slack", int),
+        ],
+    )
 
     def __init__(self, split_line: str):
         re_match = SplitRegex.read_prog.match(split_line)
@@ -119,13 +122,15 @@ class Read:
             )
         ]
         self.polyAs = (
-            Read.PolyA(
+            Read.polyA_t(
+                overhang=int(re_dict["lpA_a"]),
                 length=int(re_dict["lpA_b"]),
                 slack=int(re_dict["lpA_c"]),
             ),
-            Read.PolyA(
-                length=int(re_dict["rpA_b"]),
+            Read.polyA_t(
                 slack=int(re_dict["rpA_a"]),
+                length=int(re_dict["rpA_b"]),
+                overhang=int(re_dict["rpA_c"]),
             ),
         )
         self.seq: str = ""
@@ -326,6 +331,13 @@ class canonInts:
             rids = all_read_rids
         assert rids.issubset(all_read_rids)
         self._all_reads = reads
+        self.ridx_to_polyA_slacks = [
+            [
+                read.polyAs[0].slack,
+                read.polyAs[1].slack,
+            ]
+            for read in reads
+        ]
         self.rids = rids
         self.rid_to_ridx = {
             read.rid: idx for idx, read in enumerate(reads) if read.rid in rids
@@ -397,32 +409,42 @@ class canonInts:
                 start = 0
                 end = len(self.intervals) - 1
                 step = 1
-            idxs = list(range(start, end, step))
-            assert len(idxs) == len(self.intervals) - 1
-            for idx in idxs:
+            for idx in range(start, end, step):
                 curr_cint = self.intervals[idx]
                 next_cint = self.intervals[idx + step]
                 # no exons
-                if len(curr_cint.exonic_rids()) == 0:
+                if len(curr_cint.exonic_rids()) == 0 or len(next_cint.exonic_rids()) == 0:
                     continue
-                # check if any read starts a new intron
+                # if any read starts a new intron on the next interval, skip
                 if any(
                     rid not in curr_cint.intronic_rids()
                     for rid in next_cint.intronic_rids()
                 ):
                     continue
+                # if any reads starts a new exon on the next interval, skip
+                if any(
+                    rid not in curr_cint.exonic_rids()
+                    for rid in next_cint.exonic_rids()
+                ):
+                    continue
                 # expands the reads ending at the end of the current interval
                 next_length = next_cint.end - next_cint.start
-                for rid in curr_cint.exonic_rids():
+                for rid in curr_cint.exonic_rids() - next_cint.exonic_rids():
                     # Read should have no alignment on the next interval
-                    assert rid not in next_cint.intronic_rids()
-                    assert rid not in next_cint.exonic_rids()
-                    read = self._all_reads[self.rid_to_ridx[rid]]
-                    polyA = read.polyAs[int(not reverse)]
+                    assert rid not in next_cint.intronic_rids(), (
+                        step,
+                        idx,
+                        rid,
+                        curr_cint.exonic_rids(),
+                    )
+                    ridx = self.rid_to_ridx[rid]
+                    read = self._all_reads[ridx]
+                    polyA_idx = int(not reverse)
+                    polyA = read.polyAs[polyA_idx]
                     if polyA.length > 0:
-                        if polyA.slack < next_length:
+                        if self.ridx_to_polyA_slacks[ridx][polyA_idx] < next_length:
                             continue
-                        polyA.slack -= next_length
+                        self.ridx_to_polyA_slacks[ridx][polyA_idx] -= next_length
                     next_cint.add_rid(rid, canonInts.aln_type.exon)
 
         do_extend(reverse=False)
@@ -657,6 +679,7 @@ class canonInts:
         self,
         unique: bool = True,
         min_height: int = 5,
+        figsize: tuple[int, int] = (15, 10),
         out_prefix: typing.Union[str, None] = None,
     ):
         """
@@ -674,10 +697,7 @@ class canonInts:
         fig, axes = plt.subplots(
             2,
             2,
-            figsize=(
-                15,
-                10,
-            ),
+            figsize=figsize,
             sharex=True,
             gridspec_kw={
                 "height_ratios": [1, 5],
@@ -717,7 +737,7 @@ class canonInts:
         ]
         for i, flag in enumerate(consensus_cols):
             if flag:
-                imshow_ax.axvline(i, color="green", linewidth=1)
+                imshow_ax.axvline(i + 1, color="green", linewidth=1)
 
         imshow_ax.set_ylabel(
             f"Read index (n={len(self.rids)}, u={unique_read_count})", size=10
