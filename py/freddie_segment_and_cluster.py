@@ -204,147 +204,137 @@ class canonInts:
             start position of the interval
         end : int
             end position of the interval
-        _type_to_rids : dict[canonInts.aln_type, set[int]]
+        _type_to_ridxs : dict[canonInts.aln_type, set[int]]
             dictionary mapping the type alignment to the set of reads
             with that type of alignment on the interval
-        _rid_to_type : dict[int, canonInts.aln_type]
+        _ridx_to_type : dict[int, canonInts.aln_type]
             dictionary mapping the read id to the type of alignment it
             has on the interval
 
         Methods
         -------
-        add_rid(rid: int, t: canonInts.aln_type)
+        add_ridx(ridx: int, t: canonInts.aln_type)
             add a read with a type of alignment to the interval
-        add_rids(rids: typing.Iterable[int], t: canonInts.aln_type)
+        add_ridxs(ridxs: typing.Iterable[int], t: canonInts.aln_type)
             add a set of reads with a type of alignment to the interval
-        intronic_rids() -> set[int]
+        intronic_ridxs() -> set[int]
             return the set of reads with an intronic alignment on the interval
-        exonic_rids() -> set[int]
+        exonic_ridxs() -> set[int]
             return the set of reads with an exonic alignment on the interval
-        rids() -> set[int]
+        ridxs() -> set[int]
             return the set of reads with an alignment on the interval
-        change_rid_type(rid: int, t: canonInts.aln_type)
+        change_ridx_type(ridx: int, t: canonInts.aln_type)
             change the type of alignment of a read on the interval
-        change_rids_type(rids: set[int], t: canonInts.aln_type)
+        change_ridxs_type(ridxs: set[int], t: canonInts.aln_type)
             change the type of alignment of a set of reads on the interval
         """
 
         def __init__(self, start: int, end: int) -> None:
             self.start = start
             self.end = end
-            self._type_to_rids: dict[canonInts.aln_type, set[int]] = {
+            self._type_to_ridxs: dict[canonInts.aln_type, set[int]] = {
                 t: set() for t in canonInts.aln_type
             }
-            self._rid_to_type: dict[int, canonInts.aln_type] = dict()
+            self._ridx_to_type: dict[int, canonInts.aln_type] = dict()
 
-        def add_rid(self, rid: int, t: "canonInts.aln_type"):
+        def add_ridx(self, ridx: int, t: "canonInts.aln_type"):
             """
-            Add a read with a type of alignment to the interval
+            Add a read index with a type of alignment to the interval
 
             Parameters
             ----------
-            rid : int
-                read id
+            ridx : int
+                read index in reads of the canonInts object
             t : canonInts.aln_type
                 type of alignment
             """
-            self._type_to_rids[t].add(rid)
-            self._rid_to_type[rid] = t
+            self._type_to_ridxs[t].add(ridx)
+            self._ridx_to_type[ridx] = t
 
-        def add_rids(self, rids: typing.Iterable[int], t: "canonInts.aln_type"):
+        def add_ridxs(self, ridxs: typing.Iterable[int], t: "canonInts.aln_type"):
             """
-            Add a set of reads with a type of alignment to the interval
+            Add a set of read indices with a type of alignment to the interval
 
             Parameters
             ----------
-            rids : set[int]
-                read ids
+            ridxs : set[int]
+                read indices in reads of the canonInts object
             t : canonInts.aln_type
                 type of alignment
             """
-            for rid in rids:
-                self.add_rid(rid, t)
+            for ridx in ridxs:
+                self.add_ridx(ridx, t)
 
-        def intronic_rids(self) -> set[int]:
+        def intronic_ridxs(self) -> set[int]:
             """
-            Return the set of reads with an intronic alignment on the interval
+            Return the set of read indices with an intronic alignment on the interval
 
             Returns
             -------
             set[int]
             """
-            return self._type_to_rids[canonInts.aln_type.intron]
+            return self._type_to_ridxs[canonInts.aln_type.intron]
 
-        def exonic_rids(self) -> set[int]:
+        def exonic_ridxs(self) -> set[int]:
             """
-            Return the set of reads with an exonic alignment on the interval
+            Return the set of read indices with an exonic alignment on the interval
 
             Returns
             -------
             set[int]
             """
-            return self._type_to_rids[canonInts.aln_type.exon]
+            return self._type_to_ridxs[canonInts.aln_type.exon]
 
-        def rids(self) -> set[int]:
+        def ridxs(self) -> set[int]:
             """
-            Return the set of reads with an alignment on the interval
+            Return the set of read indices with an alignment on the interval
 
             Returns
             -------
             set[int]
             """
-            return set(self._rid_to_type.keys())
+            return set(self._ridx_to_type.keys())
 
-        def change_rid_type(self, rid: int, t: "canonInts.aln_type") -> None:
+        def change_ridx_type(self, ridx: int, t: "canonInts.aln_type") -> None:
             """
             Change the type of alignment of a read on the interval
 
             Parameters
             ----------
-            rid : int
-                read id
+            ridx : int
+                read index in reads list of the canonInts object
             t : canonInts.aln_type
                 type of target alignment
             """
-            old_t = self._rid_to_type.get(rid, canonInts.aln_type.unaln)
-            self._type_to_rids[old_t].discard(rid)
-            self._type_to_rids[t].add(rid)
-            self._rid_to_type[rid] = t
+            old_t = self._ridx_to_type.get(ridx, canonInts.aln_type.unaln)
+            self._type_to_ridxs[old_t].discard(ridx)
+            self._type_to_ridxs[t].add(ridx)
+            self._ridx_to_type[ridx] = t
 
-        def change_rids_type(self, rids: set[int], t: "canonInts.aln_type") -> None:
+        def change_ridxs_type(self, ridxs: set[int], t: "canonInts.aln_type") -> None:
             """
             Change the type of alignment of a set of reads on the interval
 
             Parameters
             ----------
-            rids : set[int]
-                read ids
+            ridxs : set[int]
+                read indices in reads list of the canonInts object
             t : canonInts.aln_type
                 type of target alignment
             """
-            for rid in rids:
-                self.change_rid_type(rid, t)
+            for ridx in ridxs:
+                self.change_ridx_type(ridx, t)
 
-    def __init__(self, reads: list[Read], rids: typing.Union[set[int], None] = None):
-        all_read_rids = {read.rid for read in reads}
-        if rids is None:
-            rids = all_read_rids
-        assert rids.issubset(all_read_rids)
-        self._all_reads = reads
-        self.ridx_to_polyA_slacks = [
+    def __init__(self, reads: list[Read]):
+        self.reads = reads
+        self.polyA_slacks = [
             [
                 read.polyAs[0].slack,
                 read.polyAs[1].slack,
             ]
-            for read in reads
+            for read in self.reads
         ]
-        self.rids = rids
-        self.rid_to_ridx = {
-            read.rid: idx for idx, read in enumerate(reads) if read.rid in rids
-        }
-        self.intervals = self.make_cintervals(
-            [read for read in reads if read.rid in self.rids]
-        )
+        self.intervals = self.make_cintervals(self.reads)
         self.matrix: npt.NDArray[np.uint8] = np.ndarray((0, 0), dtype=np.uint8)
 
     @staticmethod
@@ -365,15 +355,15 @@ class canonInts:
         result: list[canonInts.cinterval] = list()
         breakpoints_set: set[int] = set()
         g = cgranges.cgranges()
-        for ridx, read in enumerate(reads, 1):
+        for base1_ridx, read in enumerate(reads, 1):
             for start, end, _, _ in read.intervals:
-                g.add("", start, end, ridx)
+                g.add("", start, end, base1_ridx)
                 breakpoints_set.add(start)
                 breakpoints_set.add(end)
             for (_, start, _, _), (end, _, _, _) in zip(
                 read.intervals[:-1], read.intervals[1:]
             ):
-                g.add("", start, end, -ridx)
+                g.add("", start, end, -base1_ridx)
         g.index()
         breakpoints: list[int] = sorted(breakpoints_set)
         for start, end in zip(breakpoints[:-1], breakpoints[1:]):
@@ -381,12 +371,12 @@ class canonInts:
                 start=start,
                 end=end,
             )
-            for _, _, ridx_label in g.overlap("", start, end):
-                rid = reads[abs(ridx_label) - 1].rid
-                if ridx_label > 0:
-                    cint.add_rid(rid, canonInts.aln_type.exon)
+            for _, _, base1_signed_ridx in g.overlap("", start, end):
+                ridx = abs(base1_signed_ridx) - 1
+                if base1_signed_ridx > 0:
+                    cint.add_ridx(ridx, canonInts.aln_type.exon)
                 else:
-                    cint.add_rid(rid, canonInts.aln_type.intron)
+                    cint.add_ridx(ridx, canonInts.aln_type.intron)
             result.append(cint)
         return result
 
@@ -413,39 +403,41 @@ class canonInts:
                 curr_cint = self.intervals[idx]
                 next_cint = self.intervals[idx + step]
                 # no exons
-                if len(curr_cint.exonic_rids()) == 0 or len(next_cint.exonic_rids()) == 0:
+                if (
+                    len(curr_cint.exonic_ridxs()) == 0
+                    or len(next_cint.exonic_ridxs()) == 0
+                ):
                     continue
                 # if any read starts a new intron on the next interval, skip
                 if any(
-                    rid not in curr_cint.intronic_rids()
-                    for rid in next_cint.intronic_rids()
+                    ridx not in curr_cint.intronic_ridxs()
+                    for ridx in next_cint.intronic_ridxs()
                 ):
                     continue
                 # if any reads starts a new exon on the next interval, skip
                 if any(
-                    rid not in curr_cint.exonic_rids()
-                    for rid in next_cint.exonic_rids()
+                    ridx not in curr_cint.exonic_ridxs()
+                    for ridx in next_cint.exonic_ridxs()
                 ):
                     continue
                 # expands the reads ending at the end of the current interval
                 next_length = next_cint.end - next_cint.start
-                for rid in curr_cint.exonic_rids() - next_cint.exonic_rids():
+                for ridx in curr_cint.exonic_ridxs() - next_cint.exonic_ridxs():
                     # Read should have no alignment on the next interval
-                    assert rid not in next_cint.intronic_rids(), (
+                    assert ridx not in next_cint.intronic_ridxs(), (
                         step,
                         idx,
-                        rid,
-                        curr_cint.exonic_rids(),
+                        ridx,
+                        curr_cint.exonic_ridxs(),
                     )
-                    ridx = self.rid_to_ridx[rid]
-                    read = self._all_reads[ridx]
+                    read = self.reads[ridx]
                     polyA_idx = int(not reverse)
                     polyA = read.polyAs[polyA_idx]
                     if polyA.length > 0:
-                        if self.ridx_to_polyA_slacks[ridx][polyA_idx] < next_length:
+                        if self.polyA_slacks[ridx][polyA_idx] < next_length:
                             continue
-                        self.ridx_to_polyA_slacks[ridx][polyA_idx] -= next_length
-                    next_cint.add_rid(rid, canonInts.aln_type.exon)
+                        self.polyA_slacks[ridx][polyA_idx] -= next_length
+                    next_cint.add_ridx(ridx, canonInts.aln_type.exon)
 
         do_extend(reverse=False)
         do_extend(reverse=True)
@@ -465,8 +457,8 @@ class canonInts:
         last = self.intervals[0]
         for curr in self.intervals[1:]:
             if (
-                curr.exonic_rids() != last.exonic_rids()
-                or curr.intronic_rids() != last.intronic_rids()
+                curr.exonic_ridxs() != last.exonic_ridxs()
+                or curr.intronic_ridxs() != last.intronic_ridxs()
             ):
                 result.append(last)
                 last = curr
@@ -475,8 +467,8 @@ class canonInts:
                     start=last.start,
                     end=curr.end,
                 )
-                last.add_rids(curr.intronic_rids(), canonInts.aln_type.intron)
-                last.add_rids(curr.exonic_rids(), canonInts.aln_type.exon)
+                last.add_ridxs(curr.intronic_ridxs(), canonInts.aln_type.intron)
+                last.add_ridxs(curr.exonic_ridxs(), canonInts.aln_type.exon)
         result.append(last)
         self.intervals = result
         if recompute_matrix:
@@ -502,10 +494,10 @@ class canonInts:
         canonInts
         """
 
-        rids = set()
+        ridxs = set()
         for interval in self.intervals[i:j]:
-            rids.update(interval.rids())
-        return canonInts(self._all_reads, rids)
+            ridxs.update(interval.ridxs())
+        return canonInts([self.reads[ridx] for ridx in ridxs])
 
     def split_on_freq(self, min_freq=0.50) -> tuple["canonInts", "canonInts"]:
         """
@@ -523,17 +515,18 @@ class canonInts:
             tuple of two canonInts objects, the first with the reads above the threshold
             on every interval and the second with the reads below the threshold on any interval
         """
-        drop_rids = set()
+        drop_ridxs = set()
         for interval in self.intervals:
-            interval_read_count = len(interval.rids())
+            interval_read_count = len(interval.ridxs())
             if interval_read_count == 1:
                 continue
-            if len(S := interval.exonic_rids()) / interval_read_count <= min_freq:
-                drop_rids.update(S)
-            if len(S := interval.intronic_rids()) / interval_read_count <= min_freq:
-                drop_rids.update(S)
-        drop_cints = canonInts(self._all_reads, drop_rids)
-        keep_cints = canonInts(self._all_reads, self.rids - drop_rids)
+            if len(S := interval.exonic_ridxs()) / interval_read_count <= min_freq:
+                drop_ridxs.update(S)
+            if len(S := interval.intronic_ridxs()) / interval_read_count <= min_freq:
+                drop_ridxs.update(S)
+        keep_ridxs = set(range(len(self.reads))) - drop_ridxs
+        drop_cints = canonInts([self.reads[ridx] for ridx in sorted(drop_ridxs)])
+        keep_cints = canonInts([self.reads[ridx] for ridx in sorted(keep_ridxs)])
         return keep_cints, drop_cints
 
     def get_matrix(self) -> npt.NDArray[np.uint8]:
@@ -558,20 +551,16 @@ class canonInts:
         """
         self.matrix = np.full(
             (
-                len(self.rids),
+                len(self.reads),
                 len(self.intervals) + 2,
             ),
             canonInts.aln_type.unaln,
             dtype=np.uint8,
         )
-        rid_to_idx = {rid: idx for idx, rid in enumerate(self.rids)}
         for j, interval in enumerate(self.intervals, start=1):
-            for rid, val in interval._rid_to_type.items():
-                i = rid_to_idx[rid]
+            for i, val in interval._ridx_to_type.items():
                 self.matrix[i, j] = val
-        for rid in self.rids:
-            i = rid_to_idx[rid]
-            read = self._all_reads[self.rid_to_ridx[rid]]
+        for i, read in enumerate(self.reads):
             if read.polyAs[0].length > 0:
                 self.matrix[i, 0] = canonInts.aln_type.polyA
             if read.polyAs[1].length > 0:
@@ -628,11 +617,11 @@ class canonInts:
                     prev_interval = self.intervals[idx - 1]
                     next_interval = self.intervals[idx + 1]
                     cost_prev = len(
-                        prev_interval.intronic_rids() - curr_interval.intronic_rids()
-                    ) + len(prev_interval.exonic_rids() - curr_interval.exonic_rids())
+                        prev_interval.intronic_ridxs() - curr_interval.intronic_ridxs()
+                    ) + len(prev_interval.exonic_ridxs() - curr_interval.exonic_ridxs())
                     cost_next = len(
-                        next_interval.intronic_rids() - curr_interval.intronic_rids()
-                    ) + len(next_interval.exonic_rids() - curr_interval.exonic_rids())
+                        next_interval.intronic_ridxs() - curr_interval.intronic_ridxs()
+                    ) + len(next_interval.exonic_ridxs() - curr_interval.exonic_ridxs())
                     if cost_prev < cost_next:
                         prev_interval.end = curr_interval.end
                     else:
@@ -642,29 +631,33 @@ class canonInts:
                 counter = defaultdict(Counter)
                 start = self.intervals[idxs[0]].start
                 end = self.intervals[idxs[-1]].end
-                exonic_rids: set[int] = set()
-                intronic_rids: set[int] = set()
+                exonic_ridxs: set[int] = set()
+                intronic_ridxs: set[int] = set()
                 for interval in self.intervals[idxs[0] : idxs[-1] + 1]:
                     length = interval.end - interval.start
-                    for rid in interval.exonic_rids():
-                        counter[rid][canonInts.aln_type.exon] += length
-                    for rid in interval.intronic_rids():
-                        counter[rid][canonInts.aln_type.intron] += length
-                for rid in counter:
+                    for ridx in interval.exonic_ridxs():
+                        counter[ridx][canonInts.aln_type.exon] += length
+                    for ridx in interval.intronic_ridxs():
+                        counter[ridx][canonInts.aln_type.intron] += length
+                for ridx in counter:
                     if (
-                        counter[rid][canonInts.aln_type.exon]
-                        > counter[rid][canonInts.aln_type.intron]
+                        counter[ridx][canonInts.aln_type.exon]
+                        > counter[ridx][canonInts.aln_type.intron]
                     ):
-                        exonic_rids.add(rid)
+                        exonic_ridxs.add(ridx)
                     else:
-                        intronic_rids.add(rid)
+                        intronic_ridxs.add(ridx)
                 self.intervals[idxs[0]] = canonInts.cinterval(
                     start=start,
                     end=end,
                 )
-                self.intervals[idxs[0]].add_rids(exonic_rids, canonInts.aln_type.exon)
-                self.intervals[idxs[0]].add_rids(
-                    intronic_rids, canonInts.aln_type.intron
+                self.intervals[idxs[0]].add_ridxs(
+                    exonic_ridxs,
+                    canonInts.aln_type.exon,
+                )
+                self.intervals[idxs[0]].add_ridxs(
+                    intronic_ridxs,
+                    canonInts.aln_type.intron,
                 )
                 drop_idxs.update(idxs[1:])
         self.intervals = [x for i, x in enumerate(self.intervals) if i not in drop_idxs]
@@ -732,7 +725,7 @@ class canonInts:
         imshow_ax.imshow(matrix, cmap="binary", aspect="auto", interpolation="none")
 
         consensus_cols = [
-            len(interval.exonic_rids()) * len(interval.intronic_rids()) == 0
+            len(interval.exonic_ridxs()) * len(interval.intronic_ridxs()) == 0
             for interval in self.intervals
         ]
         for i, flag in enumerate(consensus_cols):
@@ -740,7 +733,7 @@ class canonInts:
                 imshow_ax.axvline(i + 1, color="green", linewidth=1)
 
         imshow_ax.set_ylabel(
-            f"Read index (n={len(self.rids)}, u={unique_read_count})", size=10
+            f"Read index (n={len(self.reads)}, u={unique_read_count})", size=10
         )
         imshow_ax.set_xlabel("Interval index", size=10)
         starts = (
