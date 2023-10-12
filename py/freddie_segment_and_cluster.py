@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 from collections import Counter, defaultdict
-import copy
 import enum
+import functools
 from itertools import groupby
 from multiprocessing import Pool
 import os
@@ -10,7 +10,6 @@ import gzip
 
 import argparse
 import re
-from typing import Generator, NamedTuple
 import typing
 from matplotlib import pyplot as plt
 
@@ -53,24 +52,26 @@ def parse_args():
 
 
 class SplitRegex:
-    interval_re = "([0-9]+)-([0-9]+)"
-    rinterval_re = "%(i)s:%(i)s" % {"i": interval_re}
+    index_re = "(0|[1-9][0-9]*)"
+    interval_re = f"{index_re}-{index_re}"
+    rinterval_re = f"{interval_re}:{interval_re}"
     chr_re = "[0-9A-Za-z!#$%&+./:;?@^_|~-][0-9A-Za-z!#$%&*+./:;=?@^_|~-]*"
     tint_interval_prog = re.compile(interval_re)
     read_interval_prog = re.compile(rinterval_re)
     tint_prog = re.compile(
-        r"#%(contig)s\t" % {"contig": f"(?P<contig>{chr_re})"}
-        + r"%(idx)s\t" % {"idx": "(?P<tint_id>[0-9]+)"}
-        + r"%(count)s\t" % {"count": "(?P<read_count>[0-9]+)"}
-        + r"%(intervals)s\n"
-        % {"intervals": "(?P<intervals>%(i)s(,%(i)s)*)" % {"i": interval_re}}
+        r"#(?P<contig>%s)\t" % chr_re
+        + r"(?P<tint_id>%s)\t" % index_re
+        + r"(?P<read_count>%s)\t" % index_re
+        + r"(?P<intervals>%(i)s(,%(i)s)*)\n" % {"i": interval_re}
     )
     read_prog = re.compile(
-        r"%(idx)s\t" % {"idx": "(?P<rid>[0-9]+)"}
-        + r"%(name)s\t" % {"name": "(?P<name>[!-?A-~]{1,254})"}
-        + r"%(strand)s\t" % {"strand": "(?P<strand>[+-])"}
-        + r"%(intervals)s\n$"
-        % {"intervals": r"(?P<intervals>%(i)s(\t%(i)s)*)" % {"i": rinterval_re}}
+        r"(?P<rid>%s)\t" % index_re
+        + r"(?P<name>[!-?A-~]{1,254})\t"
+        + r"(?P<strand>[+-])\t"
+        + r"(?P<length>%s)\t" % index_re
+        + r"(?P<lpA_a>%(i)s):(?P<lpA_b>%(i)s):(?P<lpA_c>%(i)s)\t" % {"i": index_re}
+        + r"(?P<rpA_a>%(i)s):(?P<rpA_b>%(i)s):(?P<rpA_c>%(i)s)\t" % {"i": index_re}
+        + r"(?P<intervals>%(i)s(\t%(i)s)*)\n$" % {"i": rinterval_re}
     )
 
 
@@ -99,22 +100,34 @@ class Tint:
 
 
 class Read:
+    class PolyA:
+        def __init__(self, length: int, slack: int):
+            self.length = length
+            self.slack = slack
+
     def __init__(self, split_line: str):
-        re_dict = SplitRegex.read_prog.match(split_line)
-        assert re_dict != None
-        re_dict = re_dict.groupdict()
+        re_match = SplitRegex.read_prog.match(split_line)
+        assert re_match != None
+        re_dict = re_match.groupdict()
         self.rid = int(re_dict["rid"])
-        self.name = re_dict["name"]
-        self.strand = re_dict["strand"]
-        all_intervals = [
+        self.name = str(re_dict["name"])
+        self.strand = str(re_dict["strand"])
+        self.intervals = [
             (int(ts), int(te), int(qs), int(qe))
             for (ts, te, qs, qe) in SplitRegex.read_interval_prog.findall(
                 re_dict["intervals"]
             )
         ]
-        self.intervals = all_intervals[2:]
-        self.polyA_start = all_intervals[0][1] - all_intervals[0][0] > 10
-        self.polyA_end = all_intervals[1][1] - all_intervals[1][0] > 10
+        self.polyAs = (
+            Read.PolyA(
+                length=int(re_dict["lpA_b"]),
+                slack=int(re_dict["lpA_c"]),
+            ),
+            Read.PolyA(
+                length=int(re_dict["rpA_b"]),
+                slack=int(re_dict["rpA_a"]),
+            ),
+        )
         self.seq: str = ""
         self.length: int = 0
         self.data: list = list()
@@ -323,13 +336,6 @@ class canonInts:
         self.matrix: npt.NDArray[np.uint8] = np.ndarray((0, 0), dtype=np.uint8)
 
     @staticmethod
-    def reverse_dict(d: dict) -> dict:
-        result = defaultdict(set)
-        for k, v in d.items():
-            result[v].add(k)
-        return result
-
-    @staticmethod
     def make_cintervals(reads: list[Read]) -> list["canonInts.cinterval"]:
         """
         Make the canonical intervals from a list of reads
@@ -358,71 +364,79 @@ class canonInts:
                 g.add("", start, end, -ridx)
         g.index()
         breakpoints: list[int] = sorted(breakpoints_set)
-        rid_to_f: dict[int, int] = {read.rid: len(breakpoints) for read in reads}
-        rid_to_l: dict[int, int] = {read.rid: -1 for read in reads}
         for start, end in zip(breakpoints[:-1], breakpoints[1:]):
             cint = canonInts.cinterval(
                 start=start,
                 end=end,
             )
-            cint_idx = len(result)
             for _, _, ridx_label in g.overlap("", start, end):
                 rid = reads[abs(ridx_label) - 1].rid
                 if ridx_label > 0:
                     cint.add_rid(rid, canonInts.aln_type.exon)
-                    rid_to_f[rid] = min(rid_to_f[rid], cint_idx)
-                    rid_to_l[rid] = max(rid_to_l[rid], cint_idx)
                 else:
                     cint.add_rid(rid, canonInts.aln_type.intron)
             result.append(cint)
-        for read in reads:
-            if read.polyA_start:
-                for cint in result[: rid_to_f[read.rid]]:
-                    cint.change_rid_type(read.rid, canonInts.aln_type.intron)
-            if read.polyA_end:
-                for cint in result[rid_to_l[read.rid] + 1 :]:
-                    cint.change_rid_type(read.rid, canonInts.aln_type.intron)
         return result
 
-    def extend(self, recompute_matrix=True):
+    def extend(self, recompute_matrix=False):
         """
         Extend the first/last exons of the reads as far as no intron of another read is crossed
 
         Parameters
         ----------
-        recompute_matrix : bool, optional (default=True)
+        recompute_matrix : bool, optional
             if True recompute the matrix representation of the intervals
         """
 
-        def do_extend(intervals: list[canonInts.cinterval]):
-            for idx, curr_cint in enumerate(self.intervals[:-1]):
-                next_cint = intervals[idx + 1]
+        def do_extend(reverse: bool):
+            if reverse:
+                start = len(self.intervals) - 1
+                end = 0
+                step = -1
+            else:
+                start = 0
+                end = len(self.intervals) - 1
+                step = 1
+            idxs = list(range(start, end, step))
+            assert len(idxs) == len(self.intervals) - 1
+            for idx in idxs:
+                curr_cint = self.intervals[idx]
+                next_cint = self.intervals[idx + step]
                 # no exons
                 if len(curr_cint.exonic_rids()) == 0:
                     continue
                 # check if any read starts a new intron
-                curr_intronic_rids = curr_cint.intronic_rids()
-                next_intronic_rids = next_cint.intronic_rids()
-                if any(rid not in curr_intronic_rids for rid in next_intronic_rids):
+                if any(
+                    rid not in curr_cint.intronic_rids()
+                    for rid in next_cint.intronic_rids()
+                ):
                     continue
                 # expands the reads ending at the end of the current interval
+                next_length = next_cint.end - next_cint.start
                 for rid in curr_cint.exonic_rids():
-                    next_cint.change_rid_type(rid, canonInts.aln_type.exon)
+                    # Read should have no alignment on the next interval
+                    assert rid not in next_cint.intronic_rids()
+                    assert rid not in next_cint.exonic_rids()
+                    read = self._all_reads[self.rid_to_ridx[rid]]
+                    polyA = read.polyAs[int(not reverse)]
+                    if polyA.length > 0:
+                        if polyA.slack < next_length:
+                            continue
+                        polyA.slack -= next_length
+                    next_cint.add_rid(rid, canonInts.aln_type.exon)
 
-        do_extend(self.intervals)
-        self.intervals.reverse()
-        do_extend(self.intervals)
-        self.intervals.reverse()
+        do_extend(reverse=False)
+        do_extend(reverse=True)
         if recompute_matrix:
             self.compute_matrix()
 
-    def compress(self, recompute_matrix=True):
+    def compress(self, recompute_matrix=False):
         """
         Merge adjacent intervals with the same sets of reads
 
         Parameters
         ----------
-        recompute_matrix : bool, optional (default=True)
+        recompute_matrix : bool, optional
             if True recompute the matrix representation of the intervals
         """
         result: list[canonInts.cinterval] = list()
@@ -478,7 +492,7 @@ class canonInts:
 
         Parameters
         ----------
-        min_freq : float, optional (default=0.50)
+        min_freq : float, optional
             minimum frequency of alignment type
 
         Returns
@@ -536,12 +550,12 @@ class canonInts:
         for rid in self.rids:
             i = rid_to_idx[rid]
             read = self._all_reads[self.rid_to_ridx[rid]]
-            if read.polyA_start:
+            if read.polyAs[0].length > 0:
                 self.matrix[i, 0] = canonInts.aln_type.polyA
-            if read.polyA_end:
+            if read.polyAs[1].length > 0:
                 self.matrix[i, -1] = canonInts.aln_type.polyA
 
-    def pop(self, min_len, extend=True, compress=True, recompute_matrix=True):
+    def pop(self, min_len, extend=True, compress=True, recompute_matrix=False) -> None:
         """
         Remove intervals shorter than min_len.
         The method first finds neighbouhoods of intervals shorter than min_len.
@@ -555,13 +569,15 @@ class canonInts:
         ----------
         min_len : int
             minimum length of an interval below which the interval is removed/merged
-        extend : bool, optional (default=True)
+        extend : bool, optional
             if True run extend(recompute_matrix=False) at the end of the method
-        compress : bool, optional (default=True)
+        compress : bool, optional
             if True run compress(recompute_matrix=False) at the end of the method
-        recompute_matrix : bool, optional (default=True)
+        recompute_matrix : bool, optional
             if True recompute the matrix representation of the intervals at the end of the method
         """
+        if len(self.intervals) <= 1:
+            return
 
         def enum_cint_len(args: tuple[int, canonInts.cinterval]):
             _, cint = args
@@ -580,13 +596,15 @@ class canonInts:
             if len(idxs) == 1:
                 idx = idxs[0]
                 curr_interval = self.intervals[idx]
-                next_interval = self.intervals[idx + 1]
-                prev_interval = self.intervals[idx - 1]
                 if idx == 0:
+                    next_interval = self.intervals[idx + 1]
                     next_interval.start = curr_interval.start
                 elif idx == len(self.intervals) - 1:
+                    prev_interval = self.intervals[idx - 1]
                     prev_interval.end = curr_interval.end
                 else:
+                    prev_interval = self.intervals[idx - 1]
+                    next_interval = self.intervals[idx + 1]
                     cost_prev = len(
                         prev_interval.intronic_rids() - curr_interval.intronic_rids()
                     ) + len(prev_interval.exonic_rids() - curr_interval.exonic_rids())
@@ -635,34 +653,6 @@ class canonInts:
         if recompute_matrix:
             self.compute_matrix()
 
-    # def read_gap_slack(self, rid: int, quantization: int = 10) -> tuple[tuple[int, int, int], ...]:
-    #     read = self._all_reads[self.rid_to_ridx[rid]]
-
-    #     breakpoints_set: set[int] = set()
-    #     g = cgranges.cgranges()
-    #     for ri_idx, (_, _, start, end) in enumerate(read.intervals, start=1):
-    #         g.add("", start, end, -ri_idx)
-    #         breakpoints_set.add(start)
-    #         breakpoints_set.add(end)
-    #     for ci_idx, interval in enumerate(self.intervals, start=1):
-    #         g.add("", interval.start, interval.end, ci_idx)
-    #         breakpoints_set.add(interval.start)
-    #         breakpoints_set.add(interval.end)
-    #     g.index()
-    #     breakpoints: list[int] = sorted(breakpoints_set)
-    #     for start, end in zip(breakpoints[:-1], breakpoints[1:]):
-    #         labels = tuple(g.overlap("", start, end))
-    #         for _, _, label in g.overlap("", start, end):
-    #             rid = reads[abs(ridx_label) - 1].rid
-    #             if ridx_label > 0:
-    #                 cint.add_rid(rid, canonInts.aln_type.exon)
-    #                 rid_to_f[rid] = min(rid_to_f[rid], cint_idx)
-    #                 rid_to_l[rid] = max(rid_to_l[rid], cint_idx)
-    #             else:
-    #                 cint.add_rid(rid, canonInts.aln_type.intron)
-    #         result.append(cint)
-
-        return tuple()
     def plot(
         self,
         unique: bool = True,
@@ -674,11 +664,11 @@ class canonInts:
 
         Parameters
         ----------
-        unique : bool, optional (default=True)
+        unique : bool, optional
             if True plot only unique rows of the matrix
-        min_height : int, optional (default=5)
+        min_height : int, optional
             intervals shorter than min_height are plotted in red, otherwise in blue
-        out_prefix : str, optional (default=None)
+        out_prefix : str, optional
             if not None save the plot to out_prefix.png and out_prefix.pdf
         """
         fig, axes = plt.subplots(
@@ -770,7 +760,7 @@ class canonInts:
         plt.show()
 
 
-def generate_tint_lines(split_dir: str) -> Generator[list[str], None, None]:
+def generate_tint_lines(split_dir: str) -> typing.Generator[list[str], None, None]:
     """
     Generator of the lines of the split tsv files
 
@@ -817,23 +807,34 @@ def segment_and_cluster(tint_lines: list[str]):
         cints.pop(i)
 
     M = cints.get_matrix()
-    print(len(cints.intervals))
+    print(*M.shape)
 
 
 def main():
     args = parse_args()
     os.makedirs(args.outdir, exist_ok=True)
 
-    with Pool(args.threads) as threads_pool:
+    tqdm_desc = "Segmenting and clustering transcriptional intervals"
+    if args.threads == 1:
         for _ in tqdm(
-            threads_pool.imap_unordered(
+            map(
                 segment_and_cluster,
                 generate_tint_lines(args.split_dir),
-                chunksize=1,
             ),
-            desc="Segmenting and clustering transcriptional intervals",
+            desc=tqdm_desc,
         ):
             pass
+    else:
+        threads_pool = Pool(args.threads)
+        with Pool(args.threads) as threads_pool:
+            for _ in tqdm(
+                threads_pool.imap_unordered(
+                    segment_and_cluster,
+                    generate_tint_lines(args.split_dir),
+                ),
+                desc=tqdm_desc,
+            ):
+                pass
 
 
 if __name__ == "__main__":

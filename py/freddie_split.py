@@ -5,14 +5,12 @@ from itertools import groupby
 import os
 import functools
 from collections import Counter, deque
-from typing import Generator, NamedTuple
+from typing import Callable, Generator, NamedTuple
 from multiprocessing import Pool
 import gzip
 
 from tqdm import tqdm
 import pysam
-import networkx as nx
-import numpy as np
 
 
 def parse_args():
@@ -43,6 +41,24 @@ def parse_args():
         help="Minimum contig size. Any contig with less size will not be processes.",
     )
     parser.add_argument(
+        "--max-del-size",
+        default=20,
+        type=int,
+        help="Maximum deletion size. Any deletion longer than this will trigger a splice split.",
+    )
+    parser.add_argument(
+        "--min-polyA-length",
+        default=10,
+        type=int,
+        help="Minimum polyA length. Any polyA shorter than this will be ignored.",
+    )
+    parser.add_argument(
+        "--polyA-match-scores",
+        default="1,-2",
+        type=str,
+        help="PolyA match scores. Comma-separated scores for matching and mismatching bases.",
+    )
+    parser.add_argument(
         "-o",
         "--outdir",
         type=str,
@@ -50,7 +66,13 @@ def parse_args():
         help="Path to output directory.",
     )
     args = parser.parse_args()
-    assert args.threads > 0
+    args.polyA_m_score, args.polyA_x_score = list(
+        map(int, args.polyA_match_scores.split(","))
+    )
+    assert 0 <= args.max_del_size
+    assert 0 <= args.min_polyA_length
+    assert 0 < args.contig_min_size
+    assert 0 < args.threads
     return args
 
 
@@ -60,8 +82,8 @@ class CIGAR_OPS_SIMPLE(enum.IntEnum):
     query = 2
 
 
-paired_interval = NamedTuple(
-    "paired_interval",
+paired_interval_t = NamedTuple(
+    "paired_interval_t",
     [
         ("qs", int),
         ("qe", int),
@@ -69,6 +91,19 @@ paired_interval = NamedTuple(
         ("te", int),
     ],
 )
+
+
+split_args_t = NamedTuple(
+    "split_args_t",
+    [
+        ("sam_path", str),
+        ("contig", str),
+        ("outdir", str),
+        ("find_longest_polyA", Callable[[str], tuple[int, int, int]]),
+        ("get_intervals", Callable[[pysam.AlignedSegment], list[paired_interval_t]]),
+    ],
+)
+
 
 op_simply: dict[int, CIGAR_OPS_SIMPLE] = {
     pysam.CSOFT_CLIP: CIGAR_OPS_SIMPLE.query,
@@ -122,7 +157,7 @@ def canonize_cigar(
     return canonized_cigar
 
 
-def get_intervals(aln, max_del_size=20) -> list[paired_interval]:
+def get_intervals(aln, max_del_size=20) -> list[paired_interval_t]:
     """
     Returns a list of intervals of the alignment.
     Each interval is a tuple of (target_start, target_end, query_start, query_end)
@@ -137,6 +172,7 @@ def get_intervals(aln, max_del_size=20) -> list[paired_interval]:
     max_del_size : int, optional
         Maximum deletion, by default 20bp. Target skipping cigars (N, D) longer than this will
         trigger a split of the alignment into multiple intervals.
+        Default is 20bp.
     """
     cigartuples: list[tuple[int, int]] = list(aln.cigartuples)
     cigar = canonize_cigar(cigartuples)
@@ -187,7 +223,7 @@ def get_intervals(aln, max_del_size=20) -> list[paired_interval]:
             )
         qstart = qend
         tstart = tend
-    final_intervals: list[paired_interval] = list()
+    final_intervals: list[paired_interval_t] = list()
     for interval in intervals:
         qs = interval.qs
         qe = interval.qe
@@ -223,7 +259,7 @@ def get_intervals(aln, max_del_size=20) -> list[paired_interval]:
             elif op == CIGAR_OPS_SIMPLE.target:
                 te -= l
         final_intervals.append(
-            paired_interval(
+            paired_interval_t(
                 qs=qs,
                 qe=qe,
                 ts=ts,
@@ -235,11 +271,10 @@ def get_intervals(aln, max_del_size=20) -> list[paired_interval]:
 
 def find_longest_polyA(
     seq: str,
-    start: int,
-    end: int,
     match_s: int = 1,
     mismatch_s: int = -2,
-) -> paired_interval:
+    min_polyA_length: int = 10,
+) -> tuple[int, int, int]:
     """
     Finds the longest polyA in the sequence.
 
@@ -255,23 +290,24 @@ def find_longest_polyA(
         Score for matching base, by default 1
     mismatch_s : int, optional
         Score for mismatching base, by default -2
+    min_polyA_length : int, optional
+        Minimum polyA length to report, by default 10bp
 
     Returns
     -------
-    paired_interval
-        Paired interval of the longest polyA on the
-        target (a sequence of As or Ts) and the query (the given seq)
+    tuple[int, int, int]
+        Tuple of (before length, polyA length, after length) that sums up to the length of the sequence
     """
-    result = paired_interval(0, 0, 0, 0)
-    if end - start <= 0:
+    result = (len(seq), 0, 0)
+    if len(seq) == 0:
         return result
     max_length = 0
     for char in "AT":
-        if seq[start] == char:
+        if seq[0] == char:
             scores = [match_s]
         else:
             scores = [0]
-        for m in (match_s if c == char else mismatch_s for c in seq[start + 1 : end]):
+        for m in (match_s if c == char else mismatch_s for c in seq[1:]):
             scores.append(max(0, scores[-1] + m))
 
         for is_positive, g in groupby(enumerate(scores), lambda x: x[1] > 0):
@@ -282,14 +318,9 @@ def find_longest_polyA(
             last_idx += 1
             first_idx = idxs[0]
             length = last_idx - first_idx
-            if length > max_length:
+            if length > max_length and length >= min_polyA_length:
                 max_length = length
-                result = paired_interval(
-                    ts=0,
-                    te=length,
-                    qs=first_idx,
-                    qe=last_idx,
-                )
+                result = (first_idx, length, len(seq) - last_idx)
     return result
 
 
@@ -305,9 +336,11 @@ class Read:
         Read name
     strand : str
         Read strand
-    intervals : list[paired_interval]
+    qlen : int
+        Read length
+    intervals : list[paired_interval_t]
         List of intervals of the read
-        Each interval is a paired_interval namedtuple of (target_start, target_end, query_start, query_end)
+        Each interval is a paired_interval_t namedtuple of (target_start, target_end, query_start, query_end)
         Both target and query intervals are 0-based, start inclusive, and end exlusive
         E.g. the interval 0-10 is 10bp long, and includes the base at index 0 but not the base at index 10.
     left_polyA : tuple[int, int, int, int]
@@ -321,42 +354,45 @@ class Read:
         idx: int,
         name: str,
         strand: str,
-        intervals: list[paired_interval],
+        intervals: list[paired_interval_t],
         seq: str,
+        find_longest_polyA_f: Callable[
+            [str], tuple[int, int, int]
+        ] = find_longest_polyA,
     ):
         self.idx = idx
         self.name = name
         self.strand = strand
+        self.qlen = len(seq)
         self.intervals = intervals
-        polyA_interval = find_longest_polyA(seq, 0, len(seq))
-        if polyA_interval.te - polyA_interval.ts >= 10:
-            slack = len(seq) - polyA_interval.qe
-            self.left_polyA = f"1:{slack}"
-        else:
-            self.left_polyA = f"0:{len(seq)}"
 
-        polyA_interval = find_longest_polyA(seq, self.query_end(), len(seq))
-        if polyA_interval.te - polyA_interval.ts >= 10:
-            slack = polyA_interval.qs - self.query_end()
-            self.right_polyA = f"1:{slack}"
-        else:
-            self.right_polyA = f"0:{len(seq)}"
+        before, length, after = find_longest_polyA_f(seq[: self.query_start()])
+        self.left_polyA = f"{before}:{length}:{after}"
+
+        before, length, after = find_longest_polyA_f(seq[self.query_end() :])
+        self.right_polyA = f"{before}:{length}:{after}"
 
     def target_start(self):
-        return self.intervals[0][0]
+        return self.intervals[0].ts
 
     def target_end(self):
-        return self.intervals[-1][1]
+        return self.intervals[-1].ts
 
     def query_start(self):
-        return self.intervals[0][2]
+        return self.intervals[0].qs
 
     def query_end(self):
-        return self.intervals[-1][3]
+        return self.intervals[-1].qe
 
 
 def overlapping_reads(
-    sam_path: str, contig: str, names_outpath: str
+    sam_path: str,
+    contig: str,
+    names_outpath: str,
+    get_intervals_f: Callable[
+        [pysam.AlignedSegment], list[paired_interval_t]
+    ] = get_intervals,
+    find_longest_polyA_f: Callable[[str], tuple[int, int, int]] = find_longest_polyA,
 ) -> Generator[dict[int, Read], None, None]:
     """
     Generator of reads overlapping with the contig
@@ -394,8 +430,9 @@ def overlapping_reads(
             idx=ridx,
             name=aln.query_name,  # type: ignore
             strand="-" if aln.is_reverse else "+",
-            intervals=get_intervals(aln),
+            intervals=get_intervals_f(aln),
             seq=aln.query_sequence,  # type: ignore
+            find_longest_polyA_f=find_longest_polyA_f,
         )
         ridx += 1
         print(aln.query_name, file=names_outfile)  # type: ignore
@@ -510,7 +547,7 @@ def get_transcriptional_intervals(
     return tints
 
 
-def run_split(split_args: tuple[str, str, str]) -> str:
+def run_split(split_args: split_args_t) -> str:
     """
     Run the splitting stage on a given contig
 
@@ -524,15 +561,17 @@ def run_split(split_args: tuple[str, str, str]) -> str:
     str:
         The contig given as a parameter
     """
-    sam_path, contig, outdir = split_args
-    os.makedirs(outdir, exist_ok=True)
-    names_outpath = f"{outdir}/{contig}.read_names.txt.gz"
-    tints_outfile = gzip.open(f"{outdir}/{contig}.split.tsv.gz", "tw+")
+    os.makedirs(split_args.outdir, exist_ok=True)
+    names_outpath = f"{split_args.outdir}/{split_args.contig}.read_names.txt.gz"
+    tints_outfile = gzip.open(
+        f"{split_args.outdir}/{split_args.contig}.split.tsv.gz", "tw+"
+    )
     tint_idx = 0
     for reads in overlapping_reads(
-        sam_path=sam_path,
-        contig=contig,
+        sam_path=split_args.sam_path,
+        contig=split_args.contig,
         names_outpath=names_outpath,
+        get_intervals_f=split_args.get_intervals,
     ):
         tints = get_transcriptional_intervals(reads=reads)
         for tint in tints:
@@ -540,11 +579,11 @@ def run_split(split_args: tuple[str, str, str]) -> str:
                 tint,
                 tint_idx,
                 reads,
-                contig,
+                split_args.contig,
                 tints_outfile,  # type: ignore
             )
             tint_idx += 1
-    return contig
+    return split_args.contig
 
 
 def write_tint(
@@ -585,6 +624,7 @@ def write_tint(
         record.append(f"{read.idx}")
         record.append(f"{read.name}")
         record.append(f"{read.strand}")
+        record.append(f"{read.qlen}")
         record.append(f"{read.left_polyA}")
         record.append(f"{read.right_polyA}")
         for I in read.intervals:
@@ -612,12 +652,24 @@ def main():
     ), f"No contigs are left! Try checking BAM header or --contig-min-size parameter"
     args.threads = min(args.threads, len(contigs))
     split_args = list()
+    find_longest_polyA_f = functools.partial(
+        find_longest_polyA,
+        match_s=args.polyA_m_score,
+        mismatch_s=args.polyA_m_score,
+        min_polyA_length=args.min_polyA_length,
+    )
+    get_intervals_f = functools.partial(
+        get_intervals,
+        max_del_size=args.max_del_size,
+    )
     for contig in sorted(contigs, reverse=True):
         split_args.append(
-            (
-                args.bam,
-                contig,
-                args.outdir,
+            split_args_t(
+                sam_path=args.bam,
+                contig=contig,
+                outdir=args.outdir,
+                find_longest_polyA=find_longest_polyA_f,
+                get_intervals=get_intervals_f,
             )
         )
     threads_pool = Pool(args.threads)
