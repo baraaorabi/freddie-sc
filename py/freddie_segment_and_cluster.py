@@ -674,6 +674,7 @@ class canonInts:
         min_height: int = 5,
         figsize: tuple[int, int] = (15, 10),
         out_prefix: typing.Union[str, None] = None,
+        read_bins: typing.Union[list[list[int]], None] = None,
     ):
         """
         Plot the intervals and the matrix representation of the intervals using matplotlib's imshow
@@ -687,20 +688,22 @@ class canonInts:
         out_prefix : str, optional
             if not None save the plot to out_prefix.png and out_prefix.pdf
         """
+        if read_bins == None:
+            read_bins = [[rid for rid in range(len(self.reads))]]
+        N = sum(len(read_bin) for read_bin in read_bins)
         fig, axes = plt.subplots(
-            2,
-            2,
+            nrows=len(read_bins) + 1,
+            ncols=2,
             figsize=figsize,
             sharex=True,
             gridspec_kw={
-                "height_ratios": [1, 5],
+                "height_ratios": [1] + [5*len(read_bin)/N for read_bin in read_bins],
                 "width_ratios": [10, 1],
             },
             squeeze=False,
         )
         plt.subplots_adjust(wspace=0, hspace=0)
         heights_ax = axes[0, 0]
-        imshow_ax = axes[1, 0]
         fig.subplots_adjust(hspace=0)
         heights = (
             [0] + [interval.end - interval.start for interval in self.intervals] + [0]
@@ -718,46 +721,49 @@ class canonInts:
         heights_ax.set_yticklabels(yticks, size=8)
         heights_ax.grid()
 
-        matrix = self.get_matrix()
-        if unique:
-            matrix = np.unique(matrix, axis=0)
-        unique_read_count = matrix.shape[0]
-        imshow_ax.imshow(matrix, cmap="binary", aspect="auto", interpolation="none")
+        full_matrix = self.get_matrix()
+        for imshow_ax, read_bin in zip(axes[1:, 0], read_bins):
+            if len(read_bin) == 0:
+                continue
+            matrix = full_matrix[read_bin, :]
+            if unique:
+                matrix = np.unique(matrix, axis=0)
+            unique_read_count = matrix.shape[0]
+            imshow_ax.imshow(matrix, cmap="binary", aspect="auto", interpolation="none")
 
-        consensus_cols = [
-            len(interval.exonic_ridxs()) * len(interval.intronic_ridxs()) == 0
-            for interval in self.intervals
-        ]
-        for i, flag in enumerate(consensus_cols):
-            if flag:
-                imshow_ax.axvline(i + 1, color="green", linewidth=1)
+            consensus_cols = [
+                len(interval.exonic_ridxs()) * len(interval.intronic_ridxs()) == 0
+                for interval in self.intervals
+            ]
+            for i, flag in enumerate(consensus_cols):
+                if flag:
+                    imshow_ax.axvline(i + 1, color="green", linewidth=1)
 
-        imshow_ax.set_ylabel(
-            f"Read index (n={len(self.reads)}, u={unique_read_count})", size=10
-        )
-        imshow_ax.set_xlabel("Interval index", size=10)
-        starts = (
-            [0]
-            + [interval.start for interval in self.intervals]
-            + [self.intervals[-1].end]
-        )
-        xticks = np.arange(1, len(starts), max(1, len(starts) // 30))
-        if xticks[-1] != len(starts) - 1:
-            xticks = np.append(xticks, len(starts) - 1)
-        imshow_ax.set_xticks(xticks - 0.5)
-        imshow_ax.set_xticklabels(
-            [f"{i}) {starts[i]:,}" for i in xticks],
-            size=8,
-            rotation=90,
-        )
-        yticks = np.arange(0, unique_read_count, max(1, unique_read_count // 30))
-        imshow_ax.set_yticks(yticks - 0.5)
-        imshow_ax.set_yticklabels(yticks.astype(int), size=8)
-        if out_prefix is not None:
-            plt.savefig(f"{out_prefix}.png", dpi=500, bbox_inches="tight")
-            plt.savefig(f"{out_prefix}.pdf", bbox_inches="tight")
-        imshow_ax.grid(which="major", axis="both")
-
+            imshow_ax.set_ylabel(
+                f"n={len(read_bin)}, u={unique_read_count}", size=10
+            )
+            imshow_ax.set_xlabel("Interval index", size=10)
+            starts = (
+                [0]
+                + [interval.start for interval in self.intervals]
+                + [self.intervals[-1].end]
+            )
+            xticks = np.arange(1, len(starts), max(1, len(starts) // 30))
+            if xticks[-1] != len(starts) - 1:
+                xticks = np.append(xticks, len(starts) - 1)
+            imshow_ax.set_xticks(xticks - 0.5)
+            imshow_ax.set_xticklabels(
+                [f"{i}) {starts[i]:,}" for i in xticks],
+                size=8,
+                rotation=90,
+            )
+            yticks = np.arange(0, unique_read_count, max(1, unique_read_count // 30))
+            imshow_ax.set_yticks(yticks - 0.5)
+            imshow_ax.set_yticklabels(yticks.astype(int), size=8)
+            if out_prefix is not None:
+                plt.savefig(f"{out_prefix}.png", dpi=500, bbox_inches="tight")
+                plt.savefig(f"{out_prefix}.pdf", bbox_inches="tight")
+            imshow_ax.grid(which="major", axis="both")
         for ax in axes[:, 1]:
             ax.tick_params(
                 axis="both",
