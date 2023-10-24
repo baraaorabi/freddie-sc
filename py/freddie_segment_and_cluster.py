@@ -191,8 +191,8 @@ class canonInts:
 
         unaln = 0
         intron = 1
-        exon = 3
         polyA = 2
+        exon = 3
 
     class cinterval:
         """
@@ -674,7 +674,7 @@ class canonInts:
         min_height: int = 5,
         figsize: tuple[int, int] = (15, 10),
         out_prefix: typing.Union[str, None] = None,
-        read_bins: typing.Union[list[list[int]], None] = None,
+        read_bins: typing.Union[tuple[list[int], ...], None] = None,
     ):
         """
         Plot the intervals and the matrix representation of the intervals using matplotlib's imshow
@@ -689,7 +689,7 @@ class canonInts:
             if not None save the plot to out_prefix.png and out_prefix.pdf
         """
         if read_bins == None:
-            read_bins = [[rid for rid in range(len(self.reads))]]
+            read_bins = ([rid for rid in range(len(self.reads))],)
         N = sum(len(read_bin) for read_bin in read_bins)
         fig, axes = plt.subplots(
             nrows=len(read_bins) + 1,
@@ -697,7 +697,8 @@ class canonInts:
             figsize=figsize,
             sharex=True,
             gridspec_kw={
-                "height_ratios": [1] + [5*len(read_bin)/N for read_bin in read_bins],
+                "height_ratios": [1]
+                + [5 * len(read_bin) / N for read_bin in read_bins],
                 "width_ratios": [10, 1],
             },
             squeeze=False,
@@ -731,17 +732,13 @@ class canonInts:
             unique_read_count = matrix.shape[0]
             imshow_ax.imshow(matrix, cmap="binary", aspect="auto", interpolation="none")
 
-            consensus_cols = [
-                len(interval.exonic_ridxs()) * len(interval.intronic_ridxs()) == 0
-                for interval in self.intervals
-            ]
-            for i, flag in enumerate(consensus_cols):
-                if flag:
-                    imshow_ax.axvline(i + 1, color="green", linewidth=1)
+            # for i, col in enumerate(matrix.T):
+            #     vals = np.unique(col)
+            #     if canonInts.aln_type.exon in vals and canonInts.aln_type.intron in vals:
+            #         continue
+            #     imshow_ax.axvline(i + 0.5, color="green", linewidth=1)
 
-            imshow_ax.set_ylabel(
-                f"n={len(read_bin)}, u={unique_read_count}", size=10
-            )
+            imshow_ax.set_ylabel(f"n={len(read_bin)}, u={unique_read_count}", size=10)
             imshow_ax.set_xlabel("Interval index", size=10)
             starts = (
                 [0]

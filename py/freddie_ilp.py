@@ -3,40 +3,41 @@ from itertools import groupby
 import typing
 
 import pulp
-import freddie_segment_and_cluster as fsac
+from freddie_segment_and_cluster import canonInts
 
 
 class FredILP:
-    def __init__(self, cints: fsac.canonInts):
+    def __init__(self, cints: canonInts):
+        interval_map = {
+            canonInts.aln_type.exon: canonInts.aln_type.exon,
+            canonInts.aln_type.polyA: canonInts.aln_type.exon,
+            canonInts.aln_type.intron: canonInts.aln_type.intron,
+            canonInts.aln_type.unaln: canonInts.aln_type.intron,
+        }
         row_to_ridxs: defaultdict[
-            tuple[fsac.canonInts.aln_type, ...],
+            tuple[canonInts.aln_type, ...],
             list[int],
         ] = defaultdict(list)
         self.interval_lengths = (
             (10,)
-            + tuple(
-                interval.end - interval.start
-                for idx, interval in enumerate(cints.intervals)
-            )
+            + tuple(interval.end - interval.start for interval in cints.intervals)
             + (10,)
         )
         for idx, row in enumerate(cints.get_matrix()):
-            first_exon = len(row) - 1
-            last_exon = 0
+            first = len(row) - 1
+            last = 0
             for j, aln_type in enumerate(row):
                 if aln_type in [
-                    fsac.canonInts.aln_type.exon,
-                    fsac.canonInts.aln_type.polyA,
+                    canonInts.aln_type.exon,
+                    canonInts.aln_type.polyA,
                 ]:
-                    first_exon = min(first_exon, j)
-                    last_exon = max(last_exon, j)
+                    first = min(first, j)
+                    last = max(last, j)
+            assert first <= last
             key = (
-                tuple(fsac.canonInts.aln_type.unaln for _ in range(first_exon))
-                + tuple(row[first_exon : last_exon + 1])
-                + tuple(
-                    fsac.canonInts.aln_type.unaln
-                    for _ in range(last_exon + 1, len(row))
-                )
+                tuple(canonInts.aln_type.unaln for _ in range(first))
+                + tuple(interval_map[i] for i in row[first : last + 1])
+                + tuple(canonInts.aln_type.unaln for _ in range(last + 1, len(row)))
             )
             row_to_ridxs[key].append(idx)
         self.rows = tuple(row_to_ridxs.keys())
@@ -47,14 +48,14 @@ class FredILP:
 
     def get_introns(self, i) -> typing.Generator[tuple[int, int], None, None]:
         for key, group in groupby(enumerate(self.rows[i]), key=lambda x: x[1]):
-            if key == fsac.canonInts.aln_type.intron:
+            if key == canonInts.aln_type.intron:
                 j1 = next(group)[0]
                 j2 = j1
                 for j2, _ in group:
                     pass
                 yield j1, j2
 
-    def build_model(self, K: int = 2, slack: int = 10, recycling_cost=3) -> None:
+    def build_model(self, K: int = 2, slack: int = 20, max_corrections=3) -> None:
         assert K >= 2
         self.K: int = K
         M: int = len(self.interval_lengths)
@@ -101,11 +102,64 @@ class FredILP:
                         cat=pulp.LpBinary,
                     )
                     self.model += E2IR[j, k, i] == self.R2I[i, k] * (
-                        self.rows[i][j] == fsac.canonInts.aln_type.exon
+                        self.rows[i][j] == canonInts.aln_type.exon
                     )
                 # E2I[j, k] = max over  all reads i of E2IR[j, k, i]
                 for i in range(N):
                     self.model += E2I[j, k] >= E2IR[j, k, i]
+                self.model += E2I[j, k] <= pulp.lpSum(E2IR[j, k, i] for i in range(N))
+
+        # Implied variable: interval is covered (intronically or exonically) by isoform
+        # C2I[j, k]     = 1 if interval j is covered by isoform k,
+        #                 i.e., over all reads i, C2I >= C2IR[j, k, i]
+        # C2IR[j, k, i] = 1 if read i assigned to isoform k AND interval j covered by read i,
+        #                 i.e., R2I[i,k] AND (rows[i][j] != unaln)
+        # CHANGE2I[j, k] = C2I[j, k] XOR C2I[j + 1, k]
+        #                 Per isoform, this should be exactly 2
+        C2I: dict[tuple[int, int], pulp.LpVariable] = dict()
+        C2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
+        CHANGE2I: dict[tuple[int, int], pulp.LpVariable] = dict()
+        # We start assigning intervals from the first isoform
+        for k in range(1, K):
+            for j in [-1, M]:
+                C2I[j, k] = pulp.LpVariable(
+                    name=f"C2I_{'n' if j < 0 else ''}{abs(j)},{k}",
+                    cat=pulp.LpBinary,
+                )
+                self.model += C2I[j, k] == 0
+            for j in range(M):
+                C2I[j, k] = pulp.LpVariable(
+                    name=f"C2I_{j},{k}",
+                    cat=pulp.LpBinary,
+                )
+                for i in range(N):
+                    C2IR[j, k, i] = pulp.LpVariable(
+                        name=f"C2IR_{j},{k},{i}",
+                        cat=pulp.LpBinary,
+                    )
+                    self.model += C2IR[j, k, i] == self.R2I[i, k] * (
+                        self.rows[i][j] != canonInts.aln_type.unaln
+                    )
+                # C2I[j, k] = max over of C2IR[j, k, i] for each read i
+                for i in range(N):
+                    self.model += C2I[j, k] >= C2IR[j, k, i]
+                self.model += C2I[j, k] <= pulp.lpSum(C2IR[j, k, i] for i in range(N))
+            for j in range(-1, M):
+                CHANGE2I[j, k] = pulp.LpVariable(
+                    name=f"CHANGE2I_{'n' if j < 0 else ''}{abs(j)},{k}",
+                    cat=pulp.LpBinary,
+                )
+                x = C2I[j, k]
+                y = C2I[j + 1, k]
+                self.model += CHANGE2I[j, k] <= x + y
+                self.model += CHANGE2I[j, k] >= x - y
+                self.model += CHANGE2I[j, k] >= y - x
+                self.model += CHANGE2I[j, k] <= 2 - x - y
+            self.model += pulp.lpSum(CHANGE2I[j, k] for j in range(-1, M)) == 2
+
+        # There can be only one (or zero) polyA interval per isoform
+        for k in range(1, K):
+            self.model += E2I[0, k] + E2I[M - 1, k] <= 1
 
         # Adding constraints for unaligned gaps
         # If read i is assigned to isoform k, and read i contains intron j1 <-> j2, and
@@ -134,21 +188,23 @@ class FredILP:
         OBJ_SUM = pulp.lpSum(0.0)
         for i in range(N):
             for j in range(M):
-                if self.rows[i][j] != fsac.canonInts.aln_type.intron:
+                # Only introns can be corrected to exons
+                if self.rows[i][j] != canonInts.aln_type.intron:
                     continue
                 for k in range(1, K):
                     OBJ[i, j, k] = pulp.LpVariable(
                         name=f"OBJ_{i},{j},{k}",
                         cat=pulp.LpBinary,
                     )
-
-                    # Set OBJ[i, j, k] to 1 if read i is assigned to isoform k and
-                    # exon j is in isoform k without using multiplication
+                    # Set OBJ[i, j, k] to 1, without using multiplication, if:
+                    # - read i is assigned to isoform k
+                    # - exon j is in isoform k
+                    # - exon j is an intron in read i
                     self.model += OBJ[i, j, k] >= E2I[j, k] + self.R2I[i, k] - 1
                     OBJ_SUM += OBJ[i, j, k]
         # We add the chosen cost for each isoform assigned to the garbage isoform if any
         for i in range(N):
-            OBJ_SUM += len(self.ridxs[i]) * self.R2I[i, 0] * recycling_cost
+            OBJ_SUM += len(self.ridxs[i]) * self.R2I[i, 0] * (max_corrections + 1)
         self.model.setObjective(obj=OBJ_SUM)
         self.model.sense = pulp.LpMinimize
 
@@ -164,15 +220,14 @@ class FredILP:
         self.model.solve(solver=solver)
         status = self.model.status
         cost = pulp.value(self.model.objective)
-        if status != pulp.LpStatusOptimal:
-            return status, cost, tuple()
         bins: tuple[list[int], ...] = tuple(list() for _ in range(self.K))
-        for i, ridxs in enumerate(self.ridxs):
-            for k in range(self.K):
-                val = self.R2I[i, k].varValue
-                if val == None:
-                    raise ValueError("Unsolved variable")
-                elif val > 0.5:
-                    bins[k].extend(ridxs)
-                    break
+        if status == pulp.LpStatusOptimal:
+            for i, ridxs in enumerate(self.ridxs):
+                for k in range(self.K):
+                    val = self.R2I[i, k].varValue
+                    if val == None:
+                        raise ValueError("Unsolved variable")
+                    elif val > 0.5:
+                        bins[k].extend(ridxs)
+                        break
         return self.model.status, cost, bins
