@@ -3,7 +3,7 @@ from itertools import groupby
 import typing
 
 import pulp
-from freddie_segment_and_cluster import canonInts
+from freddie_segment import canonInts
 
 
 class FredILP:
@@ -110,12 +110,12 @@ class FredILP:
                 self.model += E2I[j, k] <= pulp.lpSum(E2IR[j, k, i] for i in range(N))
 
         # Implied variable: interval is covered (intronically or exonically) by isoform
-        # C2I[j, k]     = 1 if interval j is covered by isoform k,
-        #                 i.e., over all reads i, C2I >= C2IR[j, k, i]
-        # C2IR[j, k, i] = 1 if read i assigned to isoform k AND interval j covered by read i,
-        #                 i.e., R2I[i,k] AND (rows[i][j] != unaln)
+        # C2IR[j, k, i]  = 1 if read i assigned to isoform k AND interval j covered by read i,
+        #                  i.e., R2I[i,k] AND (rows[i][j] != unaln)
+        # C2I[j, k]      = 1 if interval j is covered by isoform k,
+        #                  i.e., over all reads i, C2I >= C2IR[j, k, i]
         # CHANGE2I[j, k] = C2I[j, k] XOR C2I[j + 1, k]
-        #                 Per isoform, this should be exactly 2
+        #                  Per isoform, this should be exactly 2
         C2I: dict[tuple[int, int], pulp.LpVariable] = dict()
         C2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
         CHANGE2I: dict[tuple[int, int], pulp.LpVariable] = dict()
