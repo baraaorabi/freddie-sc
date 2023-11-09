@@ -9,13 +9,13 @@ from freddie_segment import canonInts
 class FredILP:
     def __init__(self, cints: canonInts):
         interval_map = {
-            canonInts.aln_type.exon: canonInts.aln_type.exon,
-            canonInts.aln_type.polyA: canonInts.aln_type.exon,
-            canonInts.aln_type.intron: canonInts.aln_type.intron,
-            canonInts.aln_type.unaln: canonInts.aln_type.intron,
+            canonInts.aln_t.exon: canonInts.aln_t.exon,
+            canonInts.aln_t.polyA: canonInts.aln_t.exon,
+            canonInts.aln_t.intron: canonInts.aln_t.intron,
+            canonInts.aln_t.unaln: canonInts.aln_t.intron,
         }
         row_to_ridxs: defaultdict[
-            tuple[canonInts.aln_type, ...],
+            tuple[canonInts.aln_t, ...],
             list[int],
         ] = defaultdict(list)
         self.interval_lengths = (
@@ -28,16 +28,16 @@ class FredILP:
             last = 0
             for j, aln_type in enumerate(row):
                 if aln_type in [
-                    canonInts.aln_type.exon,
-                    canonInts.aln_type.polyA,
+                    canonInts.aln_t.exon,
+                    canonInts.aln_t.polyA,
                 ]:
                     first = min(first, j)
                     last = max(last, j)
             assert first <= last
             key = (
-                tuple(canonInts.aln_type.unaln for _ in range(first))
+                tuple(canonInts.aln_t.unaln for _ in range(first))
                 + tuple(interval_map[i] for i in row[first : last + 1])
-                + tuple(canonInts.aln_type.unaln for _ in range(last + 1, len(row)))
+                + tuple(canonInts.aln_t.unaln for _ in range(last + 1, len(row)))
             )
             row_to_ridxs[key].append(idx)
         self.rows = tuple(row_to_ridxs.keys())
@@ -48,7 +48,7 @@ class FredILP:
 
     def get_introns(self, i) -> typing.Generator[tuple[int, int], None, None]:
         for key, group in groupby(enumerate(self.rows[i]), key=lambda x: x[1]):
-            if key == canonInts.aln_type.intron:
+            if key == canonInts.aln_t.intron:
                 j1 = next(group)[0]
                 j2 = j1
                 for j2, _ in group:
@@ -81,18 +81,18 @@ class FredILP:
         #                 i.e., over all reads i, E2I >= E2IR[j, k, i]
         # E2IR[j, k, i] = 1 if read i assigned to isoform k AND exon j covered by read i,
         #                 i.e., R2I[i,k] AND (rows[i][j] == exon)
-        E2I: dict[tuple[int, int], pulp.LpVariable] = dict()
+        self.E2I: dict[tuple[int, int], pulp.LpVariable] = dict()
         E2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
         for j in range(M):
             # No exon is assignd to the garbage isoform
-            E2I[j, 0] = pulp.LpVariable(
+            self.E2I[j, 0] = pulp.LpVariable(
                 name=f"E2I_{j},0",
                 cat=pulp.LpBinary,
             )
-            self.model += E2I[(j, 0)] == 0
+            self.model += self.E2I[(j, 0)] == 0
             # We start assigning exons from the first isoform
             for k in range(1, K):
-                E2I[j, k] = pulp.LpVariable(
+                self.E2I[j, k] = pulp.LpVariable(
                     name=f"E2I_{j},{k}",
                     cat=pulp.LpBinary,
                 )
@@ -102,12 +102,14 @@ class FredILP:
                         cat=pulp.LpBinary,
                     )
                     self.model += E2IR[j, k, i] == self.R2I[i, k] * (
-                        self.rows[i][j] == canonInts.aln_type.exon
+                        self.rows[i][j] == canonInts.aln_t.exon
                     )
                 # E2I[j, k] = max over  all reads i of E2IR[j, k, i]
                 for i in range(N):
-                    self.model += E2I[j, k] >= E2IR[j, k, i]
-                self.model += E2I[j, k] <= pulp.lpSum(E2IR[j, k, i] for i in range(N))
+                    self.model += self.E2I[j, k] >= E2IR[j, k, i]
+                self.model += self.E2I[j, k] <= pulp.lpSum(
+                    E2IR[j, k, i] for i in range(N)
+                )
 
         # Implied variable: interval is covered (intronically or exonically) by isoform
         # C2IR[j, k, i]  = 1 if read i assigned to isoform k AND interval j covered by read i,
@@ -138,7 +140,7 @@ class FredILP:
                         cat=pulp.LpBinary,
                     )
                     self.model += C2IR[j, k, i] == self.R2I[i, k] * (
-                        self.rows[i][j] != canonInts.aln_type.unaln
+                        self.rows[i][j] != canonInts.aln_t.unaln
                     )
                 # C2I[j, k] = max over of C2IR[j, k, i] for each read i
                 for i in range(N):
@@ -159,7 +161,7 @@ class FredILP:
 
         # There can be only one (or zero) polyA interval per isoform
         for k in range(1, K):
-            self.model += E2I[0, k] + E2I[M - 1, k] <= 1
+            self.model += self.E2I[0, k] + self.E2I[M - 1, k] <= 1
 
         # Adding constraints for unaligned gaps
         # If read i is assigned to isoform k, and read i contains intron j1 <-> j2, and
@@ -178,7 +180,7 @@ class FredILP:
                         )
                         # Constraint fixing the value of GAPI
                         self.model += GAPI[key] == pulp.lpSum(
-                            E2I[j, k] * self.interval_lengths[j]
+                            self.E2I[j, k] * self.interval_lengths[j]
                             for j in range(j1, j2 + 1)
                         )
                     self.model += (
@@ -189,7 +191,7 @@ class FredILP:
         for i in range(N):
             for j in range(M):
                 # Only introns can be corrected to exons
-                if self.rows[i][j] != canonInts.aln_type.intron:
+                if self.rows[i][j] != canonInts.aln_t.intron:
                     continue
                 for k in range(1, K):
                     OBJ[i, j, k] = pulp.LpVariable(
@@ -200,7 +202,7 @@ class FredILP:
                     # - read i is assigned to isoform k
                     # - exon j is in isoform k
                     # - exon j is an intron in read i
-                    self.model += OBJ[i, j, k] >= E2I[j, k] + self.R2I[i, k] - 1
+                    self.model += OBJ[i, j, k] >= self.E2I[j, k] + self.R2I[i, k] - 1
                     OBJ_SUM += OBJ[i, j, k]
         # We add the chosen cost for each isoform assigned to the garbage isoform if any
         for i in range(N):
@@ -210,7 +212,7 @@ class FredILP:
 
     def solve(
         self, solver: str = "COIN_CMD", threads: int = 1, timeLimit: int = 5 * 60
-    ) -> tuple[int, int, tuple[list[int], ...]]:
+    ) -> tuple[int, tuple[list[canonInts.aln_t], ...], tuple[list[int], ...]]:
         solver = pulp.getSolver(
             solver,
             timeLimit=timeLimit,
@@ -219,15 +221,24 @@ class FredILP:
         )
         self.model.solve(solver=solver)
         status = self.model.status
-        cost = pulp.value(self.model.objective)
         bins: tuple[list[int], ...] = tuple(list() for _ in range(self.K))
+        isoforms: tuple[list[canonInts.aln_t], ...] = tuple(
+            list() for _ in range(self.K)
+        )
+
         if status == pulp.LpStatusOptimal:
-            for i, ridxs in enumerate(self.ridxs):
-                for k in range(self.K):
+            for k in range(self.K):
+                for i, ridxs in enumerate(self.ridxs):
                     val = self.R2I[i, k].varValue
-                    if val == None:
-                        raise ValueError("Unsolved variable")
-                    elif val > 0.5:
+                    assert val != None, f"Unsolved variable, {self.R2I[i, k]}"
+                    if val > 0.5:
                         bins[k].extend(ridxs)
-                        break
-        return self.model.status, cost, bins
+                for j in range(len(self.interval_lengths)):
+                    val = self.E2I[j, k].varValue
+                    assert val != None, f"Unsolved variable, {self.E2I[j, k]}"
+                    isoforms[k].append(
+                        canonInts.aln_t.exon
+                        if val > 0.5
+                        else canonInts.aln_t.intron
+                    )
+        return self.model.status, isoforms, bins
