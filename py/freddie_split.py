@@ -1,9 +1,8 @@
 #!/usr/bin/env python3
 import enum
 from itertools import groupby
-import os
 from collections import Counter, deque
-from typing import Callable, Generator, NamedTuple
+from typing import Generator, NamedTuple
 import typing
 
 import pysam
@@ -88,6 +87,7 @@ class Read:
         self.intervals = intervals
         self.polyAs = polyAs
 
+
 Tint = typing.NamedTuple(
     "Tint",
     [
@@ -96,6 +96,7 @@ Tint = typing.NamedTuple(
         ("reads", list[Read]),
     ],
 )
+
 
 class FredSplit:
     def __init__(
