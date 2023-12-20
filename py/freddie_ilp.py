@@ -5,19 +5,20 @@ import typing
 import pulp
 from freddie_segment import canonInts
 
+aln_t = canonInts.aln_t
 
-INTERVAL_MAP = {
-    canonInts.aln_t.exon: canonInts.aln_t.exon,
-    canonInts.aln_t.polyA: canonInts.aln_t.exon,
-    canonInts.aln_t.intron: canonInts.aln_t.intron,
-    canonInts.aln_t.unaln: canonInts.aln_t.intron,
+ALN_T_MAP = {
+    aln_t.exon: aln_t.exon,
+    aln_t.polyA: aln_t.exon,
+    aln_t.intron: aln_t.intron,
+    aln_t.unaln: aln_t.intron,
 }
 
 
 class FredILP:
     def __init__(self, cints: canonInts):
-        row_to_ridxs: defaultdict[
-            tuple[canonInts.aln_t, ...],
+        data_to_ridxs: defaultdict[
+            tuple[tuple[aln_t, ...], tuple[str, ...]],
             list[int],
         ] = defaultdict(list)
         self.interval_lengths = (
@@ -26,31 +27,36 @@ class FredILP:
             + (10,)
         )
         for idx, row in enumerate(cints.get_matrix()):
+            cell_types = cints.reads[idx].cell_types
             first = len(row) - 1
             last = 0
             for j, aln_type in enumerate(row):
                 if aln_type in [
-                    canonInts.aln_t.exon,
-                    canonInts.aln_t.polyA,
+                    aln_t.exon,
+                    aln_t.polyA,
                 ]:
                     first = min(first, j)
                     last = max(last, j)
             assert first <= last
             key = (
-                tuple(canonInts.aln_t.unaln for _ in range(first))
-                + tuple(INTERVAL_MAP[i] for i in row[first : last + 1])
-                + tuple(canonInts.aln_t.unaln for _ in range(last + 1, len(row)))
-            )
-            row_to_ridxs[key].append(idx)
-        self.rows = tuple(row_to_ridxs.keys())
-        self.ridxs = tuple(tuple(row_to_ridxs[k]) for k in self.rows)
+                tuple(aln_t.unaln for _ in range(first))
+                + tuple(ALN_T_MAP[i] for i in row[first : last + 1])
+                + tuple(aln_t.unaln for _ in range(last + 1, len(row)))
+            ), cell_types
+            data_to_ridxs[key].append(idx)
+        keys: tuple[tuple[tuple[aln_t, ...], tuple[str, ...]], ...]
+        vals: tuple[list[int], ...]
+        keys, vals = zip(*data_to_ridxs.items())
+        self.rows = tuple(r for r, _ in keys)
+        self.cell_types = tuple(cts for _, cts in keys)
+        self.ridxs = tuple(tuple(v) for v in vals)
         for row in self.rows:
             assert len(row) == len(self.interval_lengths)
-        del row_to_ridxs
+        del data_to_ridxs, keys, vals
 
     def get_introns(self, i) -> typing.Generator[tuple[int, int], None, None]:
         for key, group in groupby(enumerate(self.rows[i]), key=lambda x: x[1]):
-            if key == canonInts.aln_t.intron:
+            if key == aln_t.intron:
                 j1 = next(group)[0]
                 j2 = j1
                 for j2, _ in group:
@@ -109,7 +115,7 @@ class FredILP:
                         cat=pulp.LpBinary,
                     )
                     self.model += E2IR[j, k, i] == self.R2I[i, k] * (
-                        self.rows[i][j] == canonInts.aln_t.exon
+                        self.rows[i][j] == aln_t.exon
                     )
                 # E2I[j, k] = max over  all reads i of E2IR[j, k, i]
                 for i in range(N):
@@ -147,7 +153,7 @@ class FredILP:
                         cat=pulp.LpBinary,
                     )
                     self.model += C2IR[j, k, i] == self.R2I[i, k] * (
-                        self.rows[i][j] != canonInts.aln_t.unaln
+                        self.rows[i][j] != aln_t.unaln
                     )
                 # C2I[j, k] = max over of C2IR[j, k, i] for each read i
                 for i in range(N):
@@ -198,7 +204,7 @@ class FredILP:
         for i in range(N):
             for j in range(M):
                 # Only introns can be corrected to exons
-                if self.rows[i][j] != canonInts.aln_t.intron:
+                if self.rows[i][j] != aln_t.intron:
                     continue
                 for k in range(1, K):
                     OBJ[i, j, k] = pulp.LpVariable(
@@ -219,7 +225,7 @@ class FredILP:
 
     def solve(
         self, solver: str = "COIN_CMD", threads: int = 1, timeLimit: int = 5 * 60
-    ) -> tuple[int, tuple[list[canonInts.aln_t], ...], tuple[list[int], ...]]:
+    ) -> tuple[int, tuple[list[aln_t], ...], tuple[list[int], ...]]:
         solver = pulp.getSolver(
             solver,
             timeLimit=timeLimit,
@@ -229,9 +235,7 @@ class FredILP:
         self.model.solve(solver=solver)
         status = self.model.status
         bins: tuple[list[int], ...] = tuple(list() for _ in range(self.K))
-        isoforms: tuple[list[canonInts.aln_t], ...] = tuple(
-            list() for _ in range(self.K)
-        )
+        isoforms: tuple[list[aln_t], ...] = tuple(list() for _ in range(self.K))
 
         if status == pulp.LpStatusOptimal:
             for k in range(self.K):
@@ -243,7 +247,5 @@ class FredILP:
                 for j in range(len(self.interval_lengths)):
                     val = self.E2I[j, k].varValue
                     assert val != None, f"Unsolved variable, {self.E2I[j, k]}"
-                    isoforms[k].append(
-                        canonInts.aln_t.exon if val > 0.5 else canonInts.aln_t.intron
-                    )
+                    isoforms[k].append(aln_t.exon if val > 0.5 else aln_t.intron)
         return self.model.status, isoforms, bins
