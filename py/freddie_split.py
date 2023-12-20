@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import enum
 from itertools import groupby
-from collections import Counter, deque
+from collections import Counter, defaultdict, deque
 from typing import Generator, NamedTuple
 import typing
 
@@ -60,6 +60,8 @@ class Read:
         overhang is the number of bases that are after polyA tail
         length is the length of the polyA tail
         slack is the number of bases that are before polyA tail (between the read alignment and the polyA tail)
+    cell_types : tuple[str, ...]
+        Tuple of cell types that the read belongs to
     """
 
     PolyA = typing.NamedTuple(
@@ -79,6 +81,7 @@ class Read:
         intervals: list[paired_interval_t],
         qlen: int,
         polyAs: tuple[PolyA, PolyA],
+        cell_types: tuple[str, ...],
     ):
         self.idx = idx
         self.name = name
@@ -86,6 +89,7 @@ class Read:
         self.qlen = qlen
         self.intervals = intervals
         self.polyAs = polyAs
+        self.cell_types = cell_types
 
 
 Tint = typing.NamedTuple(
@@ -106,6 +110,8 @@ class FredSplit:
         polyA_x_score: int,
         polyA_min_len: int,
         contig_min_len: int,
+        rname_to_cbs_tsv: None | str = None,
+        cb_to_ct_tsv: None | str = None,
     ) -> None:
         self.cigar_max_del = cigar_max_del
         self.polyA_m_score = polyA_m_score
@@ -114,6 +120,23 @@ class FredSplit:
         self.contig_min_len = contig_min_len
         self.read_count = 0
         self.tint_count = 0
+        self.qname_to_celltypes: defaultdict[str, tuple[str, ...]] = defaultdict(tuple)
+        cb_to_ct: dict[str, str] = dict()
+        if cb_to_ct_tsv is not None:
+            with open(cb_to_ct_tsv, "r") as f:
+                for line in f:
+                    cell_barcode, cell_type = line.strip().split("\t")
+                    cb_to_ct[cell_barcode] = cell_type
+        if rname_to_cbs_tsv is not None:
+            with open(rname_to_cbs_tsv, "r") as f:
+                for line in f:
+                    read_name, cell_barcodes = line.strip().split("\t")
+                    ct_set = set()
+                    for cb in cell_barcodes.split(","):
+                        if cb == "":
+                            continue
+                        ct_set.add(cb_to_ct.get(cb, cb))
+                    self.qname_to_celltypes[read_name] = tuple(ct_set)
 
     def get_transcriptional_intervals(
         self,
@@ -443,6 +466,7 @@ class FredSplit:
                 intervals=intervals,
                 qlen=len(seq),
                 polyAs=polyAs,
+                cell_types=self.qname_to_celltypes[qname],
             )
             self.read_count += 1
             s = intervals[0].ts

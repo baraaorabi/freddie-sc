@@ -6,14 +6,16 @@ import pulp
 from freddie_segment import canonInts
 
 
+INTERVAL_MAP = {
+    canonInts.aln_t.exon: canonInts.aln_t.exon,
+    canonInts.aln_t.polyA: canonInts.aln_t.exon,
+    canonInts.aln_t.intron: canonInts.aln_t.intron,
+    canonInts.aln_t.unaln: canonInts.aln_t.intron,
+}
+
+
 class FredILP:
     def __init__(self, cints: canonInts):
-        interval_map = {
-            canonInts.aln_t.exon: canonInts.aln_t.exon,
-            canonInts.aln_t.polyA: canonInts.aln_t.exon,
-            canonInts.aln_t.intron: canonInts.aln_t.intron,
-            canonInts.aln_t.unaln: canonInts.aln_t.intron,
-        }
         row_to_ridxs: defaultdict[
             tuple[canonInts.aln_t, ...],
             list[int],
@@ -36,7 +38,7 @@ class FredILP:
             assert first <= last
             key = (
                 tuple(canonInts.aln_t.unaln for _ in range(first))
-                + tuple(interval_map[i] for i in row[first : last + 1])
+                + tuple(INTERVAL_MAP[i] for i in row[first : last + 1])
                 + tuple(canonInts.aln_t.unaln for _ in range(last + 1, len(row)))
             )
             row_to_ridxs[key].append(idx)
@@ -55,7 +57,12 @@ class FredILP:
                     pass
                 yield j1, j2
 
-    def build_model(self, K: int = 2, slack: int = 20, max_corrections=3) -> None:
+    def build_model(
+        self,
+        K: int = 2,
+        slack: int = 20,
+        max_corrections: int = 3,
+    ) -> None:
         assert K >= 2
         self.K: int = K
         M: int = len(self.interval_lengths)
@@ -117,7 +124,7 @@ class FredILP:
         # C2I[j, k]      = 1 if interval j is covered by isoform k,
         #                  i.e., over all reads i, C2I >= C2IR[j, k, i]
         # CHANGE2I[j, k] = C2I[j, k] XOR C2I[j + 1, k]
-        #                  Per isoform, this should be exactly 2
+        #                  Per isoform, the sum over C2I vals should be exactly 2
         C2I: dict[tuple[int, int], pulp.LpVariable] = dict()
         C2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
         CHANGE2I: dict[tuple[int, int], pulp.LpVariable] = dict()
@@ -237,8 +244,6 @@ class FredILP:
                     val = self.E2I[j, k].varValue
                     assert val != None, f"Unsolved variable, {self.E2I[j, k]}"
                     isoforms[k].append(
-                        canonInts.aln_t.exon
-                        if val > 0.5
-                        else canonInts.aln_t.intron
+                        canonInts.aln_t.exon if val > 0.5 else canonInts.aln_t.intron
                     )
         return self.model.status, isoforms, bins

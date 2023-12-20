@@ -28,6 +28,20 @@ def parse_args():
         + " Assumes splice aligner is used to the genome (e.g. minimap2 -x splice)",
     )
     parser.add_argument(
+        "--rname-to-cbs",
+        type=str,
+        default=None,
+        help="Path to TSV file with read name to cell barcode(s)."
+        + " Cell barcodes field is comma-separated and can be an empty string.",
+    )
+    parser.add_argument(
+        "--cb-to-ct",
+        type=str,
+        default=None,
+        help="Path to TSV file with cell barcode to cell type."
+        + " If not provided, each cell barcode is considered as a unique cell type.",
+    )
+    parser.add_argument(
         "-t",
         "--threads",
         default=1,
@@ -307,6 +321,7 @@ def get_isoforms(
                 for j, e in enumerate(isoform[1:-1])
                 if e == canonInts.aln_t.exon
             ]
+            isoform_reads = [recycling_ridxs[i] for i in bins[1]]
             isoform_read = Read(
                 idx=-1,
                 name="",
@@ -325,8 +340,10 @@ def get_isoforms(
                         slack=0,
                     ),
                 ),
+                cell_types=tuple(
+                    {ct for ridx in isoform_reads for ct in tint.reads[ridx].cell_types}
+                ),
             )
-            isoform_reads = [recycling_ridxs[i] for i in bins[1]]
             isoform_reads.extend(
                 get_compatible_reads(
                     ridxs=unsampled_ridxs,
@@ -355,6 +372,8 @@ def main():
         polyA_x_score=args.polyA_x_score,
         polyA_min_len=args.polyA_min_len,
         contig_min_len=args.contig_min_len,
+        rname_to_cbs_tsv=args.rname_to_cbs,
+        cb_to_ct_tsv=args.cb_to_ct,
     )
     generate_all_tints_f = functools.partial(
         split.generate_all_tints,
