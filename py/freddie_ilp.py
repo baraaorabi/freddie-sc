@@ -63,39 +63,116 @@ class FredILP:
                     pass
                 yield j1, j2
 
+    def ilp_max_binary(
+        self,
+        lhs_var: pulp.LpVariable,
+        rhs_vars: list[pulp.LpVariable],
+    ):
+        # if any rhs_var is 1, then lhs_var is 1
+        for rhs_var in rhs_vars:
+            self.model += lhs_var >= rhs_var
+        # if all rhs_vars are 0, then lhs_var is 0
+        self.model += lhs_var <= pulp.lpSum(rhs_vars)
+
+    def ilp_xor_binary(
+        self,
+        lhs_var: pulp.LpVariable,
+        x: pulp.LpVariable,
+        y: pulp.LpVariable,
+    ):
+        # If both x and y are 0, then lhs_var is 0
+        self.model += lhs_var <= x + y
+        # If x is 1 and y is 0, then lhs_var is 1
+        self.model += lhs_var >= x - y
+        # If y is 1 and x is 0, then lhs_var is 1
+        self.model += lhs_var >= y - x
+        # If both x and y are 1, then lhs_var is 0
+        self.model += lhs_var <= 2 - x - y
+
+    def ilp_and_binary(
+        self,
+        lhs_var: pulp.LpVariable,
+        x: pulp.LpVariable,
+        y: pulp.LpVariable,
+    ):
+        # If x is 0, then lhs_var is 0
+        self.model += lhs_var <= x
+        # If y is 0, then lhs_var is 0
+        self.model += lhs_var <= y
+        # If x and y are both 1, then lhs_var is 1
+        self.model += lhs_var >= x + y - 1
+
     def build_model(
         self,
         K: int = 2,
         slack: int = 20,
         max_corrections: int = 3,
     ) -> None:
+        ## Some constants ##
+        ct_to_ctidx: dict[str, int] = dict()
+        ctidx_to_ct: dict[int, str] = dict()
+        for cell_types in self.cell_types:
+            for cell_type in cell_types:
+                if cell_type not in ct_to_ctidx:
+                    ctidx = len(ct_to_ctidx)
+                    ct_to_ctidx[cell_type] = ctidx
+                    ctidx_to_ct[ctidx] = cell_type
         assert K >= 2
         self.K: int = K
+        J: int = len(ct_to_ctidx)
         M: int = len(self.interval_lengths)
         N: int = len(self.rows)
         MAX_ISOFORM_LG: int = sum(self.interval_lengths)
 
-        # ILP model ------------------------------------------------------
-        self.model = pulp.LpProblem("isoforms_v9_20231014", pulp.LpMinimize)
-        # Decision variables
+        # --------------------------- ILP model --------------------------
+        self.model = pulp.LpProblem("scFreddie_v20240102", pulp.LpMinimize)
+        # ---------------------- Decision variables ----------------------
         # R2I[i, k] = 1 if read i assigned to isoform k
         self.R2I: dict[tuple[int, int], pulp.LpVariable] = dict()
         for i in range(N):
             for k in range(K):
-                self.R2I[i, k] = pulp.LpVariable(
-                    name=f"R2I_{i},{k}",
-                    cat=pulp.LpBinary,
-                )
-            # Constraint enforcing that each read is assigned to exactly one isoform
+                self.R2I[i, k] = pulp.LpVariable(name=f"R2I_{i},{k}", cat=pulp.LpBinary)
+            # Each read must be assigned to exactly one bin
             self.model += pulp.lpSum(self.R2I[i, k] for k in range(0, K)) == 1
-
-        # Implied variable: canonical exons presence in isoforms
+        # ---------------------- Helping variables -----------------------
+        ## Vars for canonical exons presence in isoforms
         # E2I[j, k]     = 1 if canonical exon j is in isoform k,
         #                 i.e., over all reads i, E2I >= E2IR[j, k, i]
         # E2IR[j, k, i] = 1 if read i assigned to isoform k AND exon j covered by read i,
         #                 i.e., R2I[i,k] AND (rows[i][j] == exon)
+        ## Vars for interval being covered (intronically or exonically) by isoform
+        # C2IR[j, k, i]  = 1 if read i assigned to isoform k AND interval j covered by read i,
+        #                  i.e., R2I[i,k] AND (rows[i][j] != unaln)
+        # C2I[j, k]      = 1 if interval j is covered by isoform k,
+        #                  i.e., over all reads i, C2I >= C2IR[j, k, i]
+        ## Vars fpr interval changes coverage state from its previous interval
+        # CHANGE2I[j, k] = C2I[j, k] XOR C2I[j + 1, k]
+        #                  Per isoform, the sum over CHANGE2I vals should be exactly 2
+        ## Vars for cell type being expressed by reads in isoform k
+        # I2T[k, l]      = 1 if isoform k has a read with cell type l
+        #                  i.e., over all reads i with cell type l,
+        #                        I2T[k, l] = max R2I[i, k],
+        ## Vars for interval being covered by isoform in specific cell type
+        # C2IRT[j, k, i, l] = 1 if read i has cell type l,
+        #                     assigned to isoform k,
+        #                     AND interval j covered by read i,
+        #                     i.e., R2I[i,k] AND (rows[i][j] != unaln)
+        # C2IT[j, k, j]     = 1 if interval j is covered by isoform k,
+        #                     i.e., over all reads i with cell type l,
+        #                     C2IT[j, k, l] = max(C2IRT[j, k, i, l])
+        ## Vars for unaligned gaps
+        # GAPI[j1, j2, k] = sum of the length of the intervals
+        #                   between intervals j1 and j2 (inclusively) in isoform k
         self.E2I: dict[tuple[int, int], pulp.LpVariable] = dict()
         E2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
+        C2I: dict[tuple[int, int], pulp.LpVariable] = dict()
+        C2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
+        CHANGE2I: dict[tuple[int, int], pulp.LpVariable] = dict()
+        I2T: dict[tuple[int, int], pulp.LpVariable] = dict()
+        C2IRT: dict[tuple[int, int, int, int], pulp.LpVariable] = dict()
+        C2IT: dict[tuple[int, int, int], pulp.LpVariable] = dict()
+        GAPI: dict[tuple[int, int, int], pulp.LpVariable] = dict()
+        # Setting up E2IR and E2I vars
         for j in range(M):
             # No exon is assignd to the garbage isoform
             self.E2I[j, 0] = pulp.LpVariable(
@@ -118,24 +195,12 @@ class FredILP:
                         self.rows[i][j] == aln_t.exon
                     )
                 # E2I[j, k] = max over  all reads i of E2IR[j, k, i]
-                for i in range(N):
-                    self.model += self.E2I[j, k] >= E2IR[j, k, i]
-                self.model += self.E2I[j, k] <= pulp.lpSum(
-                    E2IR[j, k, i] for i in range(N)
+                self.ilp_max_binary(
+                    lhs_var=self.E2I[j, k],
+                    rhs_vars=[E2IR[j, k, i] for i in range(N)],
                 )
-
-        # Implied variable: interval is covered (intronically or exonically) by isoform
-        # C2IR[j, k, i]  = 1 if read i assigned to isoform k AND interval j covered by read i,
-        #                  i.e., R2I[i,k] AND (rows[i][j] != unaln)
-        # C2I[j, k]      = 1 if interval j is covered by isoform k,
-        #                  i.e., over all reads i, C2I >= C2IR[j, k, i]
-        # CHANGE2I[j, k] = C2I[j, k] XOR C2I[j + 1, k]
-        #                  Per isoform, the sum over C2I vals should be exactly 2
-        C2I: dict[tuple[int, int], pulp.LpVariable] = dict()
-        C2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
-        CHANGE2I: dict[tuple[int, int], pulp.LpVariable] = dict()
-        # We start assigning intervals from the first isoform
-        for k in range(1, K):
+        # Setting up C2IR and C2I vars
+        for k in range(1, K):  # Start from k=1; no constraint on the garbage isoform
             for j in [-1, M]:
                 C2I[j, k] = pulp.LpVariable(
                     name=f"C2I_{'n' if j < 0 else ''}{abs(j)},{k}",
@@ -152,13 +217,16 @@ class FredILP:
                         name=f"C2IR_{j},{k},{i}",
                         cat=pulp.LpBinary,
                     )
-                    self.model += C2IR[j, k, i] == self.R2I[i, k] * (
-                        self.rows[i][j] != aln_t.unaln
+                    self.model += C2IR[j, k, i] == (
+                        self.R2I[i, k] * self.rows[i][j] != aln_t.unaln
                     )
                 # C2I[j, k] = max over of C2IR[j, k, i] for each read i
-                for i in range(N):
-                    self.model += C2I[j, k] >= C2IR[j, k, i]
-                self.model += C2I[j, k] <= pulp.lpSum(C2IR[j, k, i] for i in range(N))
+                self.ilp_max_binary(
+                    lhs_var=C2I[j, k],
+                    rhs_vars=[C2IR[j, k, i] for i in range(N)],
+                )
+        # Setting up CHANGE2I vars
+        for k in range(1, K):
             for j in range(-1, M):
                 CHANGE2I[j, k] = pulp.LpVariable(
                     name=f"CHANGE2I_{'n' if j < 0 else ''}{abs(j)},{k}",
@@ -166,22 +234,54 @@ class FredILP:
                 )
                 x = C2I[j, k]
                 y = C2I[j + 1, k]
-                self.model += CHANGE2I[j, k] <= x + y
-                self.model += CHANGE2I[j, k] >= x - y
-                self.model += CHANGE2I[j, k] >= y - x
-                self.model += CHANGE2I[j, k] <= 2 - x - y
-            self.model += pulp.lpSum(CHANGE2I[j, k] for j in range(-1, M)) == 2
-
-        # There can be only one (or zero) polyA interval per isoform
+                self.ilp_xor_binary(
+                    lhs_var=CHANGE2I[j, k],
+                    x=x,
+                    y=y,
+                )
+        # Setting up I2T vars
         for k in range(1, K):
-            self.model += self.E2I[0, k] + self.E2I[M - 1, k] <= 1
-
-        # Adding constraints for unaligned gaps
-        # If read i is assigned to isoform k, and read i contains intron j1 <-> j2, and
-        # the sum of the lengths of exons in isoform k between exons j1 and j2 is L
-        # then L <= slack
-        # GAPI[j1, j2, k] = sum of the length of the exons between exons j1 and j2 (inclusively) in isoform k
-        GAPI: dict[tuple[int, int, int], pulp.LpVariable] = dict()
+            for l in range(J):
+                I2T[k, l] = pulp.LpVariable(
+                    name=f"I2T_{k},{l}",
+                    cat=pulp.LpBinary,
+                )
+                i_list = [i for i in range(N) if ctidx_to_ct[l] in self.cell_types[i]]
+                # Max over all reads i with cell type l of R2I[i, k]
+                self.ilp_max_binary(
+                    lhs_var=I2T[k, l],
+                    rhs_vars=[self.R2I[i, k] for i in i_list],
+                )
+        # Setting up C2IRT and C2IT vars
+        for k in range(1, K):
+            for j in range(M):
+                for i in range(N):
+                    for cell_type in self.cell_types[i]:
+                        l = ct_to_ctidx[cell_type]
+                        C2IRT[j, k, i, l] = pulp.LpVariable(
+                            name=f"C2IRT_{j},{k},{i},{l}",
+                            cat=pulp.LpBinary,
+                        )
+                        self.model += C2IRT[j, k, i, l] == (
+                            self.R2I[i, k] * self.rows[i][j] != aln_t.unaln
+                        )
+        for k in range(1, K):
+            for j in range(M):
+                for l in range(J):
+                    C2IT[j, k, l] = pulp.LpVariable(
+                        name=f"C2IT_{j},{k},{l}",
+                        cat=pulp.LpBinary,
+                    )
+                    i_list = [
+                        i for i in range(N) if ctidx_to_ct[l] in self.cell_types[i]
+                    ]
+                    # If any read has cell type l and exon j, then C2IT[j, k, l] = 1
+                    # I.e. C2IT[j, k, l] = max over all reads i with cell type l of C2IRT[j, k, i, l]
+                    self.ilp_max_binary(
+                        lhs_var=C2IT[j, k, l],
+                        rhs_vars=[C2IRT[j, k, i, l] for i in i_list],
+                    )
+        # Setting up GAPI vars
         for i in range(N):
             for j1, j2 in self.get_introns(i):
                 # Start from k=1; no constraint on the garbage isoform
@@ -196,9 +296,45 @@ class FredILP:
                             self.E2I[j, k] * self.interval_lengths[j]
                             for j in range(j1, j2 + 1)
                         )
-                    self.model += (
-                        GAPI[key] - MAX_ISOFORM_LG * (1 - self.R2I[i, k]) <= slack
+        # ------------------------- Constraints -------------------------
+        ## Contraint: On isoform contiguity
+        # Each isoform must be contiguous
+        # I.e. for each isoform k, the sum of CHANGE2I[j, k] over all j must be exactly 2
+        for k in range(1, K):
+            self.model += pulp.lpSum(CHANGE2I[j, k] for j in range(-1, M)) == 2
+        ## Contraint: On cell type
+        # If isoform k has a read with cell type l (I2T[k, l] = 1),
+        # and interval j is covered by isoform k (C2I[j, k] = 1),
+        # then interval j must be covered by isoform k in cell type l reads (C2IT[j, k, l] = 1)
+        # I.e. C2IT[j, k, l] = I2T[k, l] & C2I[j, k] - 1
+        for k in range(1, K):
+            for l in range(J):
+                for j in range(M):
+                    self.ilp_and_binary(
+                        lhs_var=C2IT[j, k, l],
+                        x=I2T[k, l],
+                        y=C2I[j, k],
                     )
+        ## Contraint: On polyA tail
+        # There can be only one (or zero) polyA interval per isoform
+        for k in range(1, K):
+            self.model += self.E2I[0, k] + self.E2I[M - 1, k] <= 1
+        ## Contraint: On unaligned gaps
+        # Adding constraints for unaligned gaps
+        # If read i is assigned to isoform k, and read i contains intron j1 <-> j2, and
+        # the sum of the lengths of exons in isoform k between exons j1 and j2 is L
+        # then L <= slack
+        for i in range(N):
+            for j1, j2 in self.get_introns(i):
+                # Start from k=1; no constraint on the garbage isoform
+                for k in range(1, K):
+                    self.model += (
+                        GAPI[(j1, j2, k)] - MAX_ISOFORM_LG * (1 - self.R2I[i, k])
+                        <= slack
+                    )
+
+
+        # ----------------------- Objective function -------------------------
         OBJ: dict[tuple[int, int, int], pulp.LpVariable] = dict()
         OBJ_SUM = pulp.lpSum(0.0)
         for i in range(N):
@@ -211,12 +347,16 @@ class FredILP:
                         name=f"OBJ_{i},{j},{k}",
                         cat=pulp.LpBinary,
                     )
-                    # Set OBJ[i, j, k] to 1, without using multiplication, if:
-                    # - read i is assigned to isoform k
+                    # Set OBJ[i, j, k] to conjuction of:
+                    # - exon j is an intron in read i (ensured by if statement above),
+                    # - read i is assigned to isoform k, and
                     # - exon j is in isoform k
-                    # - exon j is an intron in read i
-                    self.model += OBJ[i, j, k] >= self.E2I[j, k] + self.R2I[i, k] - 1
-                    OBJ_SUM += OBJ[i, j, k]
+                    self.ilp_and_binary(
+                        lhs_var=OBJ[i, j, k],
+                        x=self.R2I[i, k],
+                        y=self.E2I[j, k],
+                    )
+                    OBJ_SUM += OBJ[i, j, k] * len(self.ridxs[i])
         # We add the chosen cost for each isoform assigned to the garbage isoform if any
         for i in range(N):
             OBJ_SUM += len(self.ridxs[i]) * self.R2I[i, 0] * (max_corrections + 1)
@@ -224,7 +364,10 @@ class FredILP:
         self.model.sense = pulp.LpMinimize
 
     def solve(
-        self, solver: str = "COIN_CMD", threads: int = 1, timeLimit: int = 5 * 60
+        self,
+        solver: str = "COIN_CMD",
+        threads: int = 1,
+        timeLimit: int = 5 * 60,
     ) -> tuple[int, tuple[list[aln_t], ...], tuple[list[int], ...]]:
         solver = pulp.getSolver(
             solver,
