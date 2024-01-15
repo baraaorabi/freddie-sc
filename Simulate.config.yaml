@@ -2,89 +2,126 @@ outpath: output/simulate
 enable_piping: false
 # Pipeline modules
 
-# >---- Entry point modules. Produce MDF as output. 
-# Mrg :
-## Merge the output of multiple pipelines into a single MDF and use it as input.
-## Takes sources key-value pair whose value is a list of pipeline names to merge.
-## The multiple pipelines can have different models and different references.
-## Must include params key-value as a list (not string) of pipeline names to merge.
-# Tsb : 
-## Splices the genome. Generates transcripts based on the model expression.
-## Tsb module allows for params key-value pair with the value being a string.
-## Must include mode (either Xpr or Xpr_sc) and model (sample name) key-value pairs.
-
-# >----> Core modules with MDF as input and MDF as output.
-## All these modules take params key-value pair with string values
-# Flt : Filters molecules out molecules that fail the given conditions
-# PCR : PCR amplification
-# plA : polyA tailing
-# SCB : Single-cell barcoding of molecules (from tags added by Tsb module with Xpr_sc mode)
-# Tag : Tag the molecules with on 5' or 3' end with specified FASTA pattern
-# Flp : Flib the molecule strands with a given probability
-# Trc : Truncate the molecules. Takes model (sample name) key-value pair
-
-# ----> Terminal sequencing module with FASTQ/A as output.
-# Seq : 
-## Sequence the molecules. Can only be last module in its pipeline. 
-## Takes model (sample name or TKSM error/qscore model name (try: tksm sequence -h)) key-value pair.
 TS_experiments:
-    S1_h:
+    C1:
         pipeline:
             - Tsb:
-                params: "--molecule-count 1000000"
-                model: "N1"
-                mode: Xpr_sc
-            - Trc:
-                params: ""
-                model: "N1"
+                  params: "--molecule-count 1000000 --molecule-prefix C1_ -s 41"
+                  model: A549
+    C2:
+        pipeline:
+            - Tsb:
+                  params: "--molecule-count 1000000 --molecule-prefix C2_ -s 42"
+                  model: Hct116
+    C3:
+        pipeline:
+            - Tsb:
+                  params: "--molecule-count 1000000 --molecule-prefix C3_ -s 43"
+                  model: HepG2
+    C4:
+        pipeline:
+            - Tsb:
+                  params: "--molecule-count 1000000 --molecule-prefix C4_ -s 44"
+                  model: K562
+    C5:
+        pipeline:
+            - Tsb:
+                  params: "--molecule-count 1000000 --molecule-prefix C5_ -s 45"
+                  model: MCF7
     S1_p1:
         pipeline:
             - Mrg:
-                sources: ["S1_h",]
+                  sources: ["C1", "C2", "C3", "C4", "C5"]
             - Flt:
-                params: "-c \"info CB\""
+                  params: '-c "info CB"'
             - plA:
-                params: "--normal=15,7.5"
-            - Tag: 
-                params: "--format3 10"
-            - SCB: 
-                params: ""
+                  params: "--normal=15,7.5"
             - Tag:
-                params: "--format3 AGATCGGAAGAGCGTCGTGTAG"
+                  params: "--format3 10"
+            - SCB:
+                  params: ""
+            - Tag:
+                  params: "--format3 AGATCGGAAGAGCGTCGTGTAG"
     S1_p2:
         pipeline:
             - Mrg:
-                sources: ["S1_h",]
+                  sources: ["C1", "C2", "C3", "C4", "C5"]
             - Flt:
-                params: "-c \"info CB\" --negate"
+                  params: '-c "info CB" --negate'
     S1:
         pipeline:
             - Mrg:
-                sources: ["S1_p1", "S1_p2"]
+                  sources: ["S1_p1", "S1_p2"]
             - PCR:
-                params: "--cycles 5 --molecule-count 5000000 -x Taq-setting1"
+                  params: "--cycles 5 --molecule-count 5000000 -x Taq-setting1"
             - Flp:
-                params: "-p 0.5"
+                  params: "-p 0.5"
             - Tag:
-                params: "--format5 AATGTACTTCGTTCAGTTACGTATTGCT --format3 GCAATACGTAACTGAACGAAGT"
+                  params: "--format5 AATGTACTTCGTTCAGTTACGTATTGCT --format3 GCAATACGTAACTGAACGAAGT"
+            - Trc:
+                  params: ""
+                  model: MCF7
             - Shf:
-                params: ""
+                  params: ""
             - Seq:
-                params: "--skip-qual-compute"
-                model: "N1"
+                  params: "--skip-qual-compute"
 
 exec:
-    tksm: build/bin/tksm
+    tksm: bin/tksm
 
 refs:
     Homo_sapiens:
-        GTF : data/refs/homo_sapiens.annot.gtf
-        DNA : data/refs/homo_sapiens.dna.fa
-        cDNA : data/refs/homo_sapiens.cdna.fa
-    10x_bc: data/refs/3M-february-2018.txt.gz
+        GTF: data/refs/homo_sapiens.annot.gtf
+        DNA: data/refs/homo_sapiens.dna.fa
+        cDNA: data/refs/homo_sapiens.cdna.fa
+    Homo_sapiens_chr21:
+        GTF: data/refs/homo_sapiens.chr21.annot.gtf
+        DNA: data/refs/homo_sapiens.chr21.dna.fa
+        cDNA: data/refs/homo_sapiens.chr21.cdna.fa
+    barcodes:
+        10x: data/refs/3M-february-2018.txt.gz
 
 samples:
-    "N1":
+    A549:
         fastq:
-            - data/samples/N1.fastq
-        ref: Homo_sapiens
+            - data/samples/SGNex_A549_directcDNA_replicate1_run3.fastq.gz
+        ref: Homo_sapiens_chr21
+    Hct116:
+        fastq:
+            - data/samples/SGNex_Hct116_directcDNA_replicate4_run1.fastq.gz
+        ref: Homo_sapiens_chr21
+    HepG2:
+        fastq:
+            - data/samples/SGNex_HepG2_directcDNA_replicate5_run3.fastq.gz
+        ref: Homo_sapiens_chr21
+    K562:
+        fastq:
+            - data/samples/SGNex_K562_directcDNA_replicate1_run2.fastq.gz
+        ref: Homo_sapiens_chr21
+    MCF7:
+        fastq:
+            - data/samples/SGNex_MCF7_directcDNA_replicate4_run2.fastq.gz
+        ref: Homo_sapiens_chr21
+
+models:
+    Tsb:
+        A549:
+            sample: A549
+            cb-txt: 10x
+            params: "--cb-count 500 --random-seed 41"
+        Hct116:
+            sample: Hct116
+            cb-txt: 10x
+            params: "--cb-count 500 --random-seed 42"
+        HepG2:
+            sample: HepG2
+            cb-txt: 10x
+            params: "--cb-count 500 --random-seed 43"
+        K562:
+            sample: K562
+            cb-txt: 10x
+            params: "--cb-count 500 --random-seed 44"
+        MCF7:
+            sample: MCF7
+            cb-txt: 10x
+            params: "--cb-count 500 --random-seed 45"
