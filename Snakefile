@@ -135,7 +135,7 @@ rule scTagger_match:
 rule scTagger_extract_bc:
     input:
         tsv=f"{output_d}/scTagger/{{sample}}/{{sample}}.lr_bc.tsv.gz",
-        wl=config["refs"]["10x_bc"],
+        wl= lambda wc: config["refs"]["barcodes"][config["samples"][wc.sample]["bc_wl"]],
     output:
         tsv=f"{output_d}/scTagger/{{sample}}/{{sample}}.bc_whitelist.tsv.gz",
     conda:

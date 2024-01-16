@@ -12,17 +12,23 @@ exec:
 
 samples:
     S1:
-        ref: Homo_sapiens
+        ref: Homo_sapiens_chr21
+        bc_wl: 10x
         reads: output/simulate/TS/S1.fastq
         truth: output/simulate/TS/S1.tsv
-    N1:
-        ref: Homo_sapiens
-        reads: data/samples/N1.fastq
-        truth: output/simulate/TS/S1.tsv
+    # N1:
+    #     ref: Homo_sapiens
+    #     reads: data/samples/N1.fastq
+    #     truth: output/simulate/TS/S1.tsv
 
 refs:
     Homo_sapiens:
         GTF : data/refs/homo_sapiens.annot.gtf
         DNA : data/refs/homo_sapiens.dna.fa
         cDNA : data/refs/homo_sapiens.cdna.fa
-    10x_bc: data/refs/3M-february-2018.txt.gz
+    Homo_sapiens_chr21:
+        GTF: data/refs/homo_sapiens.chr21.annot.gtf
+        DNA: data/refs/homo_sapiens.chr21.dna.fa
+        cDNA: data/refs/homo_sapiens.chr21.cdna.fa
+    barcodes:
+        10x: data/refs/3M-february-2018.txt.gz
