@@ -6,27 +6,27 @@ TS_experiments:
     C1:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 1000000 --molecule-prefix C1_ -s 41"
+                  params: "--molecule-count 50000 --molecule-prefix C1_ -s 41"
                   model: A549
     C2:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 1000000 --molecule-prefix C2_ -s 42"
+                  params: "--molecule-count 50000 --molecule-prefix C2_ -s 42"
                   model: Hct116
     C3:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 1000000 --molecule-prefix C3_ -s 43"
+                  params: "--molecule-count 50000 --molecule-prefix C3_ -s 43"
                   model: HepG2
     C4:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 1000000 --molecule-prefix C4_ -s 44"
+                  params: "--molecule-count 50000 --molecule-prefix C4_ -s 44"
                   model: K562
     C5:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 1000000 --molecule-prefix C5_ -s 45"
+                  params: "--molecule-count 50000 --molecule-prefix C5_ -s 45"
                   model: MCF7
     S1_p1:
         pipeline:
@@ -53,7 +53,7 @@ TS_experiments:
             - Mrg:
                   sources: ["S1_p1", "S1_p2"]
             - PCR:
-                  params: "--cycles 5 --molecule-count 5000000 -x Taq-setting1"
+                  params: "--cycles 5 --molecule-count 100000 -x Taq-setting1"
             - Flp:
                   params: "-p 0.5"
             - Tag:
