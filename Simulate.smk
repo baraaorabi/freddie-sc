@@ -14,14 +14,20 @@ module TS_smk:
         config
 
 
+### Import TKSM Snakemake rules
+use rule * from TS_smk exclude all
+
+
 outpath = config["outpath"]
 preproc_d = f"{outpath}/preprocess"
 TS_d = f"{outpath}/TS"
 exprmnts_re = "|".join([re.escape(x) for x in config["TS_experiments"]])
-
-
-### Import TKSM Snakemake rules
-use rule * from TS_smk exclude all
+fastq_exprmnts = [
+    x
+    for x in config["TS_experiments"]
+    if TS_smk.exprmnt_final_file(x).endswith(".fastq")
+]
+fastq_exprmnts_re = "|".join([re.escape(x) for x in fastq_exprmnts])
 
 
 def get_source_mdfs(exprmnt):
@@ -38,7 +44,11 @@ def get_source_mdfs(exprmnt):
 
 rule all:
     input:
-        tsvs=[f"{TS_d}/{x}.tsv" for x in config["TS_experiments"]],
+        expand(
+            f"{TS_d}/{{exprmnt}}.{{ext}}",
+            exprmnt=fastq_exprmnts,
+            ext=["fastq", "tsv"],
+        ),
     default_target: True
 
 
@@ -50,9 +60,9 @@ rule ground_truth_files:
         fastq=f"{TS_d}/{{exprmnt}}.fastq",
         tsv=f"{TS_d}/{{exprmnt}}.tsv",
     wildcard_constraints:
-        exprmnt=exprmnts_re,
+        exprmnt=fastq_exprmnts_re,
     run:
-        shell("cp {input.fastq} {output.fastq}")
+        shell(f"cp {input.fastq} {output.fastq}")
         rid_to_mid = dict()
         for idx, line in enumerate(open(input.fastq)):
             if idx % 4 != 0:
@@ -63,15 +73,18 @@ rule ground_truth_files:
                 if comment.startswith("molecule_id="):
                     mid = comment.split("=")[1]
                     rid_to_mid[rid] = mid
+            assert rid in rid_to_mid
         mid_to_tid = dict()
         mid_to_cb = dict()
+        cb_to_cell_lines = dict()
         for mdf in input.mdfs:
+            exprmnt = mdf.split("/")[-2]
             for line in open(mdf):
                 if line[0] != "+":
                     continue
                 line = line.strip().split("\t")
                 mid = line[0][1:]
-                cb = ""
+                cb = "."
                 tid = ""
                 for comment in line[2].split(";"):
                     if comment.startswith("CB"):
@@ -82,10 +95,21 @@ rule ground_truth_files:
                         tid = comment.split("=")[1]
                 mid_to_tid[mid] = tid
                 mid_to_cb[mid] = cb
+                if cb not in cb_to_cell_lines:
+                    cb_to_cell_lines[cb] = set()
+                cb_to_cell_lines[cb].add(exprmnt)
 
         outfile = open(output.tsv, "w+")
         print(
-            "\t".join(["read_id", "molecule_id", "transcript_id", "cell_barcode"]),
+            "\t".join(
+                [
+                    "read_id",
+                    "molecule_id",
+                    "transcript_id",
+                    "cell_barcode",
+                    "cell_lines",
+                ]
+            ),
             file=outfile,
         )
         for rid, mid in rid_to_mid.items():
@@ -95,6 +119,7 @@ rule ground_truth_files:
                 mid,
                 mid_to_tid[parent_md],
                 mid_to_cb[parent_md],
+                ",".join(sorted(cb_to_cell_lines[mid_to_cb[parent_md]])),
             ]
             print("\t".join(record), file=outfile)
         outfile.close()
