@@ -53,7 +53,7 @@ TS_experiments:
             - Mrg:
                   sources: ["S1_p1", "S1_p2"]
             - PCR:
-                  params: "--cycles 5 --molecule-count 100000 --error-rate 0.0 --efficiency 0.88"
+                  params: "--cycles 5 --molecule-count 100000 -x Taq-setting1"
             - Flp:
                   params: "-p 0.5"
             - Tag:
