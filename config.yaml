@@ -4,12 +4,6 @@ gurobi:
     license: ~/gurobi.lic
     timeout: 1
 
-exec:
-    split: py/freddie_split.py
-    segment: py/freddie_segment.py
-    cluster: py/freddie_cluster.py
-    isoforms: py/freddie_isoforms.py
-
 samples:
     S1:
         ref: Homo_sapiens_chr21

@@ -3,7 +3,7 @@ from itertools import groupby
 import typing
 
 import pulp
-from freddie_segment import canonInts
+from freddie.segment import canonInts
 
 aln_t = canonInts.aln_t
 

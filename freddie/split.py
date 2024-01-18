@@ -110,8 +110,7 @@ class FredSplit:
         polyA_x_score: int,
         polyA_min_len: int,
         contig_min_len: int,
-        rname_to_cbs_tsv: None | str = None,
-        cb_to_ct_tsv: None | str = None,
+        rname_to_celltypes: None | str = None,
     ) -> None:
         self.cigar_max_del = cigar_max_del
         self.polyA_m_score = polyA_m_score
@@ -121,22 +120,15 @@ class FredSplit:
         self.read_count = 0
         self.tint_count = 0
         self.qname_to_celltypes: defaultdict[str, tuple[str, ...]] = defaultdict(tuple)
-        cb_to_ct: dict[str, str] = dict()
-        if cb_to_ct_tsv is not None:
-            with open(cb_to_ct_tsv, "r") as f:
-                for line in f:
-                    cell_barcode, cell_type = line.strip().split("\t")
-                    cb_to_ct[cell_barcode] = cell_type
-        if rname_to_cbs_tsv is not None:
-            with open(rname_to_cbs_tsv, "r") as f:
-                for line in f:
-                    read_name, cell_barcodes = line.strip().split("\t")
-                    ct_set = set()
-                    for cb in cell_barcodes.split(","):
-                        if cb == "":
-                            continue
-                        ct_set.add(cb_to_ct.get(cb, cb))
-                    self.qname_to_celltypes[read_name] = tuple(ct_set)
+        if rname_to_celltypes is not None:
+            for line in open(rname_to_celltypes):
+                read_name, cell_types = line.rstrip("\n").split("\t")
+                ct_set = set()
+                for ct in cell_types.split(","):
+                    if ct == "":
+                        continue
+                    ct_set.add(ct)
+                self.qname_to_celltypes[read_name] = tuple(ct_set)
 
     def get_transcriptional_intervals(
         self,
@@ -486,7 +478,7 @@ class FredSplit:
         sam = pysam.AlignmentFile(sam_path, "rb")
         contigs: list[str] = [
             x["SN"]
-            for x in pysam.AlignmentFile(args.bam, "rb").header["SQ"]  # type: ignore
+            for x in sam.header["SQ"]  
             if x["LN"] > self.contig_min_len
         ]
         for contig in tqdm(

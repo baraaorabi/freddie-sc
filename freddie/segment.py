@@ -9,7 +9,7 @@ from matplotlib import pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import cgranges
-from freddie_split import Read, paired_interval_t
+from freddie.split import Read, paired_interval_t
 
 
 class canonInts:

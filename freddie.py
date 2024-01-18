@@ -9,9 +9,9 @@ import numpy as np
 import pulp
 from tqdm import tqdm
 
-from freddie_split import FredSplit, Read, Tint
-from freddie_segment import canonInts, paired_interval_t
-from freddie_ilp import FredILP
+from freddie.split import FredSplit, Read, Tint
+from freddie.segment import canonInts, paired_interval_t
+from freddie.ilp import FredILP
 
 
 def parse_args():
@@ -28,18 +28,12 @@ def parse_args():
         + " Assumes splice aligner is used to the genome (e.g. minimap2 -x splice)",
     )
     parser.add_argument(
-        "--rname-to-cbs",
+        "--rname-to-celltypes",
         type=str,
         default=None,
-        help="Path to TSV file with read name to cell barcode(s)."
-        + " Cell barcodes field is comma-separated and can be an empty string.",
-    )
-    parser.add_argument(
-        "--cb-to-ct",
-        type=str,
-        default=None,
-        help="Path to TSV file with cell barcode to cell type."
-        + " If not provided, each cell barcode is considered as a unique cell type.",
+        help="Path to TSV file with two columns: 1st  is read namd, 2nd is its cell type(s)."
+        + "Reads omitted are assumed belong to no cell type."
+        + "Cell types are comma-separated and can be strings (with no commas!).",
     )
     parser.add_argument(
         "-t",
@@ -372,8 +366,7 @@ def main():
         polyA_x_score=args.polyA_x_score,
         polyA_min_len=args.polyA_min_len,
         contig_min_len=args.contig_min_len,
-        rname_to_cbs_tsv=args.rname_to_cbs,
-        cb_to_ct_tsv=args.cb_to_ct,
+        rname_to_celltypes=args.rname_to_celltypes,
     )
     generate_all_tints_f = functools.partial(
         split.generate_all_tints,

@@ -28,12 +28,10 @@ TS_experiments:
             - Tsb:
                   params: "--molecule-count 50000 --molecule-prefix C5: -s 45"
                   model: MCF7
-    S1_p1:
+    S1:
         pipeline:
             - Mrg:
                   sources: ["C1", "C2", "C3", "C4", "C5"]
-            - Flt:
-                  params: '-c "info CB"'
             - plA:
                   params: "--normal=15,7.5"
             - Tag:
@@ -42,16 +40,6 @@ TS_experiments:
                   params: ""
             - Tag:
                   params: "--format3 AGATCGGAAGAGCGTCGTGTAG"
-    S1_p2:
-        pipeline:
-            - Mrg:
-                  sources: ["C1", "C2", "C3", "C4", "C5"]
-            - Flt:
-                  params: '-c "info CB" --negate'
-    S1:
-        pipeline:
-            - Mrg:
-                  sources: ["S1_p1", "S1_p2"]
             - PCR:
                   params: "--cycles 5 --molecule-count 100000 -x Taq-setting1"
             - Flp:
@@ -108,20 +96,20 @@ models:
         A549:
             sample: A549
             cb-txt: 10x
-            params: "--cb-count 500 --random-seed 41"
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 41"
         Hct116:
             sample: Hct116
             cb-txt: 10x
-            params: "--cb-count 500 --random-seed 42"
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 42"
         HepG2:
             sample: HepG2
             cb-txt: 10x
-            params: "--cb-count 500 --random-seed 43"
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 43"
         K562:
             sample: K562
             cb-txt: 10x
-            params: "--cb-count 500 --random-seed 44"
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 44"
         MCF7:
             sample: MCF7
             cb-txt: 10x
-            params: "--cb-count 500 --random-seed 45"
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 45"
