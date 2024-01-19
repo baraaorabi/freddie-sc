@@ -194,7 +194,24 @@ class canonInts:
             for read in self.reads
         ]
         self.intervals = self.make_cintervals((read.intervals for read in self.reads))
+        self.validate_intervals()
         self.matrix: npt.NDArray[np.uint8] = np.ndarray((0, 0), dtype=np.uint8)
+
+    def validate_intervals(self):
+        for interval in self.intervals:
+            assert interval.intronic_ridxs() & interval.exonic_ridxs() == set()
+            assert (
+                interval.ridxs() == interval.intronic_ridxs() | interval.exonic_ridxs()
+            )
+            assert interval.start < interval.end
+
+        for interval1, interval2 in zip(self.intervals[:-1], self.intervals[1:]):
+            assert interval1.end == interval2.start, (
+                interval1.start,
+                interval1.end,
+                interval2.start,
+                interval2.end,
+            )
 
     @staticmethod
     def make_cintervals(
@@ -217,12 +234,12 @@ class canonInts:
         breakpoints_set: set[int] = set()
         g = cgranges.cgranges()
         for base1_idx, intervals in enumerate(intervals_iter, 1):
-            for start, end, _, _ in intervals:
-                g.add("", start, end, base1_idx)
-                breakpoints_set.add(start)
-                breakpoints_set.add(end)
-            for (_, start, _, _), (end, _, _, _) in zip(intervals[:-1], intervals[1:]):
-                g.add("", start, end, -base1_idx)
+            for interval in intervals:
+                g.add("", interval.ts, interval.te, base1_idx)
+                breakpoints_set.add(interval.ts)
+                breakpoints_set.add(interval.te)
+            for interval1, interval2 in zip(intervals[:-1], intervals[1:]):
+                g.add("", interval1.te, interval2.ts, -base1_idx)
         g.index()
         breakpoints: list[int] = sorted(breakpoints_set)
         for start, end in zip(breakpoints[:-1], breakpoints[1:]):
@@ -590,7 +607,6 @@ class canonInts:
                 matrix = np.unique(matrix, axis=0)
             unique_read_count = matrix.shape[0]
             imshow_ax.imshow(matrix, cmap="binary", aspect="auto", interpolation="none")
-
 
             imshow_ax.set_ylabel(f"n={len(read_bin)}, u={unique_read_count}", size=10)
             imshow_ax.set_xlabel("Interval index", size=10)
