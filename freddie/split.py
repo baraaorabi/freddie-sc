@@ -134,6 +134,7 @@ class FredSplit:
         self,
         reads: list[Read],
         contig: str,
+        min_read_support: int,
     ) -> Generator[Tint, None, None]:
         """
         Yields connected transcriptional intervals from a list of reads
@@ -217,11 +218,15 @@ class FredSplit:
                 group_intervals.append(
                     (bintervals[bint_idx].start, bintervals[bint_idx].end)
                 )
-            yield Tint(
+            tint = Tint(
                 contig=contig,
                 tid=self.tint_count,
-                reads=reads,
+                reads=[read for read in reads if read.idx in tint_rids],
             )
+            assert len(tint.reads) == len(tint_rids)
+            if len(tint.reads) < min_read_support:
+                continue
+            yield tint
             self.tint_count += 1
         assert all(enqueued)
 
@@ -474,19 +479,19 @@ class FredSplit:
         if len(reads) > 0:
             yield reads
 
-    def generate_all_tints(self, sam_path: str) -> Generator[Tint, None, None]:
+    def generate_all_tints(
+        self,
+        sam_path: str,
+        min_read_support: int = 3,
+    ) -> Generator[Tint, None, None]:
         sam = pysam.AlignmentFile(sam_path, "rb")
         contigs: list[str] = [
-            x["SN"]
-            for x in sam.header["SQ"]  
-            if x["LN"] > self.contig_min_len
+            x["SN"] for x in sam.header["SQ"] if x["LN"] > self.contig_min_len
         ]
-        for contig in tqdm(
-            contigs, desc="Reading contigs of SAM file", total=len(contigs)
-        ):
+        for contig in contigs:
             for reads in self.overlapping_reads(sam, contig):
                 for tint in tqdm(
-                    self.get_transcriptional_intervals(reads, contig),
+                    self.get_transcriptional_intervals(reads, contig, min_read_support),
                     desc=f"Generating tints of contig {contig}",
                 ):
                     yield tint

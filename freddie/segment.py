@@ -198,19 +198,20 @@ class canonInts:
         self.matrix: npt.NDArray[np.uint8] = np.ndarray((0, 0), dtype=np.uint8)
 
     def validate_intervals(self):
-        for interval in self.intervals:
-            assert interval.intronic_ridxs() & interval.exonic_ridxs() == set()
-            assert (
-                interval.ridxs() == interval.intronic_ridxs() | interval.exonic_ridxs()
+        for i in self.intervals:
+            assert i.intronic_ridxs() & i.exonic_ridxs() == set()
+            assert i.ridxs() == i.intronic_ridxs() | i.exonic_ridxs(), (
+                i.ridxs(),
+                i.intronic_ridxs(),
+                i.exonic_ridxs(),
             )
-            assert interval.start < interval.end
-
-        for interval1, interval2 in zip(self.intervals[:-1], self.intervals[1:]):
-            assert interval1.end == interval2.start, (
-                interval1.start,
-                interval1.end,
-                interval2.start,
-                interval2.end,
+            assert i.start < i.end
+        for i1, i2 in zip(self.intervals[:-1], self.intervals[1:]):
+            assert i1.end == i2.start, (
+                i1.start,
+                i1.end,
+                i2.start,
+                i2.end,
             )
 
     @staticmethod
