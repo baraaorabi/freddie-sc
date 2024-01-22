@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import enum
 from itertools import groupby
 from collections import Counter, defaultdict, deque

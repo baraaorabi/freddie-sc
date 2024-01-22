@@ -1,14 +1,13 @@
-#!/usr/bin/env python3
 import argparse
 import functools
 from multiprocessing import Pool
 import sys
 
+from freddie.isoforms import get_isoforms, Isoform
+from freddie.split import FredSplit
+
 import pulp
 from tqdm import tqdm
-
-import freddie.isoforms as FredIsoforms
-from freddie.split import FredSplit
 
 
 def parse_args():
@@ -139,14 +138,14 @@ def main():
         sam_path=args.bam,
     )
     get_isoforms_f = functools.partial(
-        FredIsoforms.get_isoforms,
+        get_isoforms,
         ilp_time_limit=args.ilp_time_limit,
         max_correction_len=args.max_correction_len,
         max_correction_count=args.max_correction_count,
         ilp_solver=args.ilp_solver,
     )
 
-    all_isoforms: list[FredIsoforms.Isoform] = list()
+    all_isoforms: list[Isoform] = list()
     if args.output == "":
         outfile = sys.stdout
     else:

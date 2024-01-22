@@ -1,15 +1,14 @@
-#!/usr/bin/env python3
 from collections import Counter, defaultdict
 import enum
 from itertools import groupby
-
 import typing
-from matplotlib import pyplot as plt
 
+from freddie.split import Read, paired_interval_t
+
+from matplotlib import pyplot as plt
 import numpy as np
 import numpy.typing as npt
 import cgranges
-from freddie.split import Read, paired_interval_t
 
 
 class canonInts:
