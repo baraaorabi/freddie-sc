@@ -126,7 +126,7 @@ class FredILP:
         MAX_ISOFORM_LG: int = sum(self.interval_lengths)
 
         # --------------------------- ILP model --------------------------
-        self.model = pulp.LpProblem("scFreddie_v20240102", pulp.LpMinimize)
+        self.model = pulp.LpProblem("freddie_v20240125", pulp.LpMinimize)
         # ---------------------- Decision variables ----------------------
         # R2I[i, k] = 1 if read i assigned to isoform k
         self.R2I: dict[tuple[int, int], pulp.LpVariable] = dict()
@@ -141,12 +141,17 @@ class FredILP:
         #                 i.e., over all reads i, E2I >= E2IR[j, k, i]
         # E2IR[j, k, i] = 1 if read i assigned to isoform k AND exon j covered by read i,
         #                 i.e., R2I[i,k] AND (rows[i][j] == exon)
+        ## Vars for exon contiguity in reads and isoforms
+        # EXON_CONTIG2IR[j, k, i] = 1 if exons j and j + 1 are both expressed in read i if it's assigned to isoform k
+        #                           i.e., R2I[i, k] AND E2IR[j, k, i] AND E2IR[j + 1, k, i]
+        # EXON_CONTIG2I[j, k] = 1 if exon j and exon j + 1 are both expressed in isoform k
+        #                      i.e., E2I[j, k] AND E2I[j + 1, k]
         ## Vars for interval being covered (intronically or exonically) by isoform
         # C2IR[j, k, i]  = 1 if read i assigned to isoform k AND interval j covered by read i,
         #                  i.e., R2I[i,k] AND (rows[i][j] != unaln)
         # C2I[j, k]      = 1 if interval j is covered by isoform k,
         #                  i.e., over all reads i, C2I >= C2IR[j, k, i]
-        ## Vars fpr interval changes coverage state from its previous interval
+        ## Vars for interval changes coverage state from its previous interval
         # CHANGE2I[j, k] = C2I[j, k] XOR C2I[j + 1, k]
         #                  Per isoform, the sum over CHANGE2I vals should be exactly 2
         ## Vars for cell type being expressed by reads in isoform k
@@ -166,6 +171,8 @@ class FredILP:
         #                   between intervals j1 and j2 (inclusively) in isoform k
         self.E2I: dict[tuple[int, int], pulp.LpVariable] = dict()
         E2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
+        EXON_CONTIG2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
+        EXON_CONTIG2I: dict[tuple[int, int], pulp.LpVariable] = dict()
         C2I: dict[tuple[int, int], pulp.LpVariable] = dict()
         C2IR: dict[tuple[int, int, int], pulp.LpVariable] = dict()
         CHANGE2I: dict[tuple[int, int], pulp.LpVariable] = dict()
@@ -199,6 +206,27 @@ class FredILP:
                 self.ilp_max_binary(
                     lhs_var=self.E2I[j, k],
                     rhs_vars=[E2IR[j, k, i] for i in range(N)],
+                )
+        # Setting up EXON_CONTIG2IR and EXON_CONTIG2I vars
+        for k in range(1, K):
+            for i in range(N):
+                for j in range(M - 1):
+                    EXON_CONTIG2IR[j, k, i] = pulp.LpVariable(
+                        name=f"EXON_CONTIG2IR_{j},{k},{i}",
+                        cat=pulp.LpBinary,
+                    )
+                    row = self.rows[i]
+                    is_contig = int(row[j] == aln_t.exon and row[j + 1] == aln_t.exon)
+                    self.model += EXON_CONTIG2IR[j, k, i] == is_contig * self.R2I[i, k]
+            for j in range(M - 1):
+                EXON_CONTIG2I[j, k] = pulp.LpVariable(
+                    name=f"EXON_CONTIG2I_{j},{k}",
+                    cat=pulp.LpBinary,
+                )
+                # EXON_CONTIG2I[j, k] = max over all reads i of EXON_CONTIG2IR[j, k, i]
+                self.ilp_max_binary(
+                    lhs_var=EXON_CONTIG2I[j, k],
+                    rhs_vars=[EXON_CONTIG2IR[j, k, i] for i in range(N)],
                 )
         # Setting up C2IR and C2I vars
         for k in range(1, K):  # Start from k=1; no constraint on the garbage isoform
@@ -299,10 +327,19 @@ class FredILP:
                         )
         # ------------------------- Constraints -------------------------
         ## Contraint: On isoform contiguity
-        # Each isoform must be contiguous
+        # Each isoform coverage must be contiguous. Coverage includes all exons and introns intervals.
         # I.e. for each isoform k, the sum of CHANGE2I[j, k] over all j must be exactly 2
         for k in range(1, K):
             self.model += pulp.lpSum(CHANGE2I[j, k] for j in range(-1, M)) == 2
+        # All adjacent exons in an isoform must be contiguous in one of the reads assigned to the isoform
+        # I.e. for each isoform k, if E2I[j] = 1 and E2I[j + 1] = 1, then EXON_CONTIG2I[j, k] = 1
+        for k in range(1, K):
+            for j in range(M - 1):
+                self.ilp_and_binary(
+                    lhs_var=EXON_CONTIG2I[j, k],
+                    x=self.E2I[j, k],
+                    y=self.E2I[j + 1, k],
+                )
         ## Contraint: On cell type
         # If isoform k has a read with cell type l (I2T[k, l] = 1),
         # and interval j is covered by isoform k (C2I[j, k] = 1),
@@ -381,7 +418,9 @@ class FredILP:
         status = self.model.status
         bins: tuple[list[int], ...] = tuple(list() for _ in range(self.K))
         bin_structures: tuple[list[aln_t], ...] = tuple(list() for _ in range(self.K))
-
+        assert status in (pulp.LpStatusNotSolved, pulp.LpStatusOptimal), pulp.LpStatus[
+            status
+        ]
         if status == pulp.LpStatusOptimal:
             for k in range(self.K):
                 for i, ridxs in enumerate(self.ridxs):

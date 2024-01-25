@@ -161,14 +161,14 @@ def get_isoforms(
     params: IsoformsParams = IsoformsParams()
 ) -> list[Isoform]:
     """
-    Get isoforms for the given Tint.
+    Returns isoforms for the given Tint.
 
     Args:
         tint: Tint
         params: Isoform params dataclass
 
-    Yields:
-        Isoform
+    Returns:
+        isoforms: list[Isoform]
     """
     assert params.min_read_support > 0
     reads: list[Read] = tint.reads
