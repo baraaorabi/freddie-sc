@@ -3,7 +3,7 @@ import functools
 from multiprocessing import Pool
 import sys
 
-from freddie.isoforms import get_isoforms, Isoform
+from freddie.isoforms import get_isoforms, Isoform, ClusteringParams
 from freddie.split import FredSplit
 
 import pulp
@@ -61,6 +61,18 @@ def parse_args():
         default="1,-2",
         type=str,
         help="PolyA scores. Comma-separated scores for matching and mismatching bases.",
+    )
+    parser.add_argument(
+        "--max-isoform-count",
+        default=20,
+        type=int,
+        help="Maximum number of isoforms to output per transcriptional interval (i.e. ~gene).",
+    )
+    parser.add_argument(
+        "--min-read-support",
+        default=3,
+        type=int,
+        help="Minimum number of reads supporting an isoform.",
     )
     parser.add_argument(
         "-o",
@@ -139,10 +151,14 @@ def main():
     )
     get_isoforms_f = functools.partial(
         get_isoforms,
-        ilp_time_limit=args.ilp_time_limit,
-        max_correction_len=args.max_correction_len,
-        max_correction_count=args.max_correction_count,
-        ilp_solver=args.ilp_solver,
+        params=ClusteringParams(
+            ilp_time_limit=args.ilp_time_limit,
+            max_correction_len=args.max_correction_len,
+            max_correction_count=args.max_correction_count,
+            ilp_solver=args.ilp_solver,
+            max_isoform_count=args.max_isoform_count,
+            min_read_support=args.min_read_support,
+        ),
     )
 
     all_isoforms: list[Isoform] = list()
@@ -157,17 +173,14 @@ def main():
             pool.imap_unordered(get_isoforms_f, generate_all_tints_f()),
             desc="All tint counter",
         ):
-            for isoform, readnames in isoform_gen:
+            for isoform in isoform_gen:
                 if args.sort_output:
                     all_isoforms.append(isoform)
                 else:
                     print(isoform, file=outfile)
                 if args.readnames_output is not None:
-                    for readname in readnames:
-                        print(
-                            f"{isoform.iid}\t{readname}",
-                            file=args.readnames_output,
-                        )
+                    for read in isoform.reads:
+                        print(f"{isoform.iid}\t{read.name}", file=args.readnames_output)
     if args.sort_output:
         all_isoforms.sort()
         for isoform in all_isoforms:

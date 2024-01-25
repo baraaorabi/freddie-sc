@@ -1,11 +1,10 @@
 from collections import defaultdict
 from itertools import groupby
-import typing
+from typing import Generator
+
+from freddie.segment import CanonIntervals, aln_t
 
 import pulp
-from freddie.segment import canonInts
-
-aln_t = canonInts.aln_t
 
 ALN_T_MAP = {
     aln_t.exon: aln_t.exon,
@@ -16,25 +15,18 @@ ALN_T_MAP = {
 
 
 class FredILP:
-    def __init__(self, cints: canonInts):
+    def __init__(self, cints: CanonIntervals):
         data_to_ridxs: defaultdict[
             tuple[tuple[aln_t, ...], tuple[str, ...]],
             list[int],
         ] = defaultdict(list)
-        self.interval_lengths = (
-            (10,)
-            + tuple(interval.end - interval.start for interval in cints.intervals)
-            + (10,)
-        )
+        self.interval_lengths = (10,) + tuple(map(len, cints.intervals)) + (10,)
         for idx, row in enumerate(cints.get_matrix()):
             cell_types = cints.reads[idx].cell_types
             first = len(row) - 1
             last = 0
             for j, aln_type in enumerate(row):
-                if aln_type in [
-                    aln_t.exon,
-                    aln_t.polyA,
-                ]:
+                if aln_type in [aln_t.exon, aln_t.polyA]:
                     first = min(first, j)
                     last = max(last, j)
             assert first <= last
@@ -54,7 +46,7 @@ class FredILP:
             assert len(row) == len(self.interval_lengths)
         del data_to_ridxs, keys, vals
 
-    def get_introns(self, i) -> typing.Generator[tuple[int, int], None, None]:
+    def get_introns(self, i) -> Generator[tuple[int, int], None, None]:
         for key, group in groupby(enumerate(self.rows[i]), key=lambda x: x[1]):
             if key == aln_t.intron:
                 j1 = next(group)[0]

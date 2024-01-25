@@ -1,25 +1,28 @@
 import functools
-from typing import Generator, Iterable, NamedTuple
+from typing import Generator
+from dataclasses import dataclass
 
 from freddie.ilp import FredILP
-from freddie.segment import canonInts, paired_interval_t
-from freddie.split import Read, Tint
+from freddie.segment import CanonIntervals, PairedInterval, aln_t
+from freddie.split import Interval, Read, Tint
 
 import numpy as np
 import pulp
 
-clustering_settings_t = NamedTuple(
-    "clustering_settings_t",
-    [
-        ("ilp_time_limit", int),
-        ("max_correction_len", int),
-        ("max_correction_count", int),
-        ("ilp_solver", str),
-        ("max_isoform_count", int),
-        ("min_read_support", int),
-    ],
-)
-aln_t = canonInts.aln_t
+
+@dataclass
+class ClusteringParams:
+    ilp_time_limit: int = 5 * 60
+    max_correction_len: int = 20
+    max_correction_count: int = 3
+    ilp_solver: str = "COIN_CMD"
+    max_isoform_count: int = 20
+    min_read_support: int = 3
+
+
+@dataclass
+class IntervalSupport(Interval):
+    support: float = 0.0
 
 
 @functools.total_ordering
@@ -31,10 +34,9 @@ class Isoform:
         tid: Tint ID
         contig: Contig
         reads: List of reads comprising the isoform
-        intervals: List of genomic intervals (i.e. exons) comprising the isoform
-        supports: List of support values for each interval.
-                    The support value is computed by adding the number of bases covered by
-                    each read in the interval and dividing by the interval length.
+        exons: List of genomic intervals (i.e. exons) comprising the isoform with support values.
+                The support value is computed by adding the number of bases covered by
+                each read in the interval and dividing by the interval length.
         strand: Strand of the isoform if it can be determined from the read polyA tails (i.e. + or -). Otherwise, "."
 
     Methods:
@@ -54,36 +56,33 @@ class Isoform:
         self.reads = reads
         self.iid = isoform_index
         self.contig = contig
+        self.exons: list[IntervalSupport] = list()
 
-        self.intervals: list[tuple[int, int]] = list()
-        self.supports: list[float] = list()
-        cints = canonInts(reads)
+        canon_ints = CanonIntervals(self.reads)
         for i in range(10):
-            cints.pop(i)
-        intervals: list[tuple[int, int]] = list()
-        supports: list[float] = list()
-        for cur_interval in cints.intervals:
-            e_cnt = len(cur_interval.exonic_ridxs())
-            i_cnt = len(cur_interval.intronic_ridxs())
-            if e_cnt > i_cnt:
-                intervals.append((cur_interval.start, cur_interval.end))
-                supports.append(e_cnt)
+            canon_ints.pop(i)
+        intervals: list[IntervalSupport] = list()
+        for i in canon_ints.intervals:
+            if (e_cnt := len(i.exonic_ridxs())) > len(i.intronic_ridxs()):
+                intervals.append(IntervalSupport(i.start, i.end, e_cnt))
         intervals.sort()
-        for cur_interval, cur_support in zip(intervals, supports):
-            if len(self.intervals) == 0:
-                self.intervals.append(cur_interval)
-                self.supports.append(cur_support)
+        for i in intervals:
+            # Add first exon
+            if len(self.exons) == 0:
+                self.exons.append(i)
                 continue
-            if self.intervals[-1][1] < cur_interval[0]:
-                self.intervals.append(cur_interval)
-                self.supports.append(cur_support)
+            # Current interval is not adjacent to previous interval: add new exon
+            if self.exons[-1].end < i.start:
+                self.exons.append(i)
                 continue
-            pre_interval = self.intervals[-1]
-            pre_support = self.supports[-1]
-            self.intervals[-1] = (pre_interval[0], cur_interval[1])
-            l1 = pre_interval[1] - pre_interval[0]
-            l2 = cur_interval[1] - cur_interval[0]
-            self.supports[-1] = float((l1 * pre_support + l2 * cur_support) / (l1 + l2))
+            # Current interval is adjacent to previous interval: merge exons and update support
+            e = self.exons[-1]
+
+            self.exons[-1] = IntervalSupport(
+                e.start,
+                i.end,
+                (len(e) * e.support + len(i) * i.support) / (len(e) + len(i)),
+            )
 
         self.strand = "."
         for read in self.reads:
@@ -97,7 +96,7 @@ class Isoform:
     def __eq__(self, __value: object) -> bool:
         if not isinstance(__value, Isoform):
             return NotImplemented
-        return self.contig == __value.contig and self.intervals == __value.intervals
+        return self.contig == __value.contig and self.exons == __value.exons
 
     def __lt__(self, __value: object) -> bool:
         if not isinstance(__value, Isoform):
@@ -107,7 +106,7 @@ class Isoform:
             if self.contig.isnumeric() and __value.contig.isnumeric():
                 return int(self.contig) < int(__value.contig)
             return self.contig < __value.contig
-        return self.intervals < __value.intervals
+        return self.exons < __value.exons
 
     def __repr__(self) -> str:
         gtf_records = list()
@@ -119,8 +118,8 @@ class Isoform:
                     self.contig,
                     "freddie",
                     "transcript",
-                    f"{self.intervals[0][0] + 1}",
-                    f"{self.intervals[-1][1]}",
+                    f"{self.exons[0].start + 1}",
+                    f"{self.exons[-1].end}",
                     ".",
                     self.strand,
                     ".",
@@ -134,17 +133,15 @@ class Isoform:
                 ]
             )
         )
-        for idx, (interval, support) in enumerate(
-            zip(self.intervals, self.supports), start=1
-        ):
+        for idx, exon in enumerate(self.exons, start=1):
             gtf_records.append(
                 "\t".join(
                     [
                         self.contig,
                         "freddie",
                         "exon",
-                        f"{interval[0] + 1}",
-                        f"{interval[1]}",
+                        f"{exon.start + 1}",
+                        f"{exon.end}",
                         ".",
                         self.strand,
                         ".",
@@ -152,7 +149,7 @@ class Isoform:
                             [
                                 f'gene_id "{gene_id}";',
                                 f'transcript_id "{isoform_id}";',
-                                f'read_support "{support:.2f}";',
+                                f'read_support "{exon.support:.2f}";',
                                 f'exon_number "{idx}";',
                             ]
                         ),
@@ -164,7 +161,7 @@ class Isoform:
 
 def get_isoforms(
     tint: Tint,
-    ilp_settings: clustering_settings_t,
+    params: ClusteringParams = ClusteringParams(),
 ) -> Generator[Isoform, None, None]:
     """
     Get isoforms for the given Tint.
@@ -176,11 +173,11 @@ def get_isoforms(
     Yields:
         Isoform
     """
-    assert ilp_settings.min_read_support > 0
+    assert params.min_read_support > 0
     reads: list[Read] = tint.reads
-    for isoform_index in range(ilp_settings.max_isoform_count):
-        recycling_reads, isoform_reads = run_ilp(reads, ilp_settings)
-        if len(isoform_reads) < ilp_settings.min_read_support:
+    for isoform_index in range(params.max_isoform_count):
+        recycling_reads, isoform_reads = run_ilp(reads, params)
+        if len(isoform_reads) < params.min_read_support:
             break
         isoform = Isoform(
             tid=tint.tid,
@@ -191,13 +188,13 @@ def get_isoforms(
         yield isoform
         # Remove the reads that were used to construct the isoform
         reads = recycling_reads
-        if len(reads) < ilp_settings.min_read_support:
+        if len(reads) < params.min_read_support:
             break
 
 
 def run_ilp(
     reads: list[Read],
-    ilp_settings: clustering_settings_t,
+    params: ClusteringParams,
 ) -> tuple[list[Read], list[Read]]:
     """
     Run ILP with the given reads and return the recycling reads and isoform reads.
@@ -218,19 +215,19 @@ def run_ilp(
 
     sample_reads: list[Read] = reads
     unsampled_reads: list[Read] = list()
-    while len(sample_reads) >= ilp_settings.min_read_support:
-        intervals = canonInts(sample_reads)
+    while len(sample_reads) >= params.min_read_support:
+        canon_ints = CanonIntervals(sample_reads)
         for i in range(10):
-            intervals.pop(i)
-        ilp: FredILP = FredILP(intervals)
+            canon_ints.pop(i)
+        ilp: FredILP = FredILP(canon_ints)
         ilp.build_model(
             K=2,
-            max_corrections=ilp_settings.max_correction_count,
-            slack=ilp_settings.max_correction_len,
+            max_corrections=params.max_correction_count,
+            slack=params.max_correction_len,
         )
         status, vects, bins = ilp.solve(
-            solver=ilp_settings.ilp_solver,
-            timeLimit=ilp_settings.ilp_time_limit,
+            solver=params.ilp_solver,
+            timeLimit=params.ilp_time_limit,
         )
         assert len(vects) == len(bins) == 2, f"Expected 2 bins, got {len(bins)}"
         recycling_bin, isoform_bin = bins
@@ -245,8 +242,8 @@ def run_ilp(
                 incompatible_reads, compatible_reads = get_compatible_reads_bins(
                     unsampled_reads=unsampled_reads,
                     isoform_reads=isoform_reads,
-                    slack=ilp_settings.max_correction_len,
-                    intervals=intervals,
+                    slack=params.max_correction_len,
+                    canon_ints=canon_ints,
                     i_vect=isoform_vect,
                 )
                 isoform_reads.extend(compatible_reads)
@@ -274,7 +271,7 @@ def run_ilp(
 def get_compatible_reads_bins(
     unsampled_reads: list[Read],
     isoform_reads: list[Read],
-    intervals: canonInts,
+    canon_ints: CanonIntervals,
     i_vect: list[aln_t],
     slack: int,
 ):
@@ -295,11 +292,8 @@ def get_compatible_reads_bins(
         compatible_reads: List of compatible reads
     """
     isoform_intervals = [
-        paired_interval_t(
-            qs=0,
-            qe=0,
-            ts=intervals.intervals[j].start,
-            te=intervals.intervals[j].end,
+        PairedInterval(
+            target=Interval(canon_ints.intervals[j].start, canon_ints.intervals[j].end)
         )
         for j, e in enumerate(i_vect[1:-1])
         if e == aln_t.exon
@@ -320,7 +314,7 @@ def get_compatible_reads_bins(
     compatible_reads: list[Read] = list()
     incompatible_reads: list[Read] = list()
     for read in unsampled_reads:
-        cints = canonInts([isoform_read, read])
+        cints = CanonIntervals([isoform_read, read])
         for i in range(10):
             cints.pop(i)
         M = cints.get_matrix()

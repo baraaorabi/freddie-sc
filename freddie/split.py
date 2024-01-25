@@ -1,8 +1,9 @@
 import enum
+from functools import total_ordering
 from itertools import groupby
 from collections import Counter, defaultdict, deque
-from typing import Generator, NamedTuple
-import typing
+from typing import Generator
+from dataclasses import dataclass
 
 import pysam
 from tqdm import tqdm
@@ -14,15 +15,49 @@ class CIGAR_OPS_SIMPLE(enum.IntEnum):
     query = 2
 
 
-paired_interval_t = NamedTuple(
-    "paired_interval_t",
-    [
-        ("qs", int),
-        ("qe", int),
-        ("ts", int),
-        ("te", int),
-    ],
-)
+@total_ordering
+@dataclass
+class Interval:
+    start: int = 0
+    end: int = 0
+
+    def __post_init__(self):
+        assert 0 <= self.start <= self.end
+
+    def __eq__(self, other):
+        return (self.start, self.end) == (other.start, other.end)
+
+    def __lt__(self, other):
+        return (self.start, self.end) < (other.start, other.end)
+
+    def __le__(self, other):
+        return (self.start, self.end) <= (other.start, other.end)
+
+    def __gt__(self, other):
+        return (self.start, self.end) > (other.start, other.end)
+
+    def __ge__(self, other):
+        return (self.start, self.end) >= (other.start, other.end)
+
+    def __len__(self):
+        return self.end - self.start
+
+
+@dataclass
+class PairedInterval:
+    query: Interval = Interval()
+    target: Interval = Interval()
+
+
+@dataclass
+class PairedIntervalCigar(PairedInterval):
+    cigar: list[tuple[CIGAR_OPS_SIMPLE, int]] = list()
+
+
+@dataclass
+class IntervalRIDs(Interval):
+    rids: list[int] = list()
+
 
 op_simply: dict[int, CIGAR_OPS_SIMPLE] = {
     pysam.CSOFT_CLIP: CIGAR_OPS_SIMPLE.query,
@@ -49,13 +84,13 @@ class Read:
         Read strand
     qlen : int
         Read length
-    intervals : list[paired_interval_t]
+    intervals : list[PairedInterval]
         List of intervals of the read
-        Each interval is a paired_interval_t namedtuple of (target_start, target_end, query_start, query_end)
+        Each interval is a PairedInterval namedtuple of (target_start, target_end, query_start, query_end)
         Both target and query intervals are 0-based, start inclusive, and end exlusive
         E.g. the interval 0-10 is 10bp long, and includes the base at index 0 but not the base at index 10.
-    polyAs : tuple[polyA_t, polyA_t]
-        Tuple of polyA_t namedtuples of (overhang, length, slack) for the left and right polyA tails
+    polyAs : tuple[PolyA, PolyA]
+        Tuple of PolyA namedtuples of (overhang, length, slack) for the left and right polyA tails
         overhang is the number of bases that are after polyA tail
         length is the length of the polyA tail
         slack is the number of bases that are before polyA tail (between the read alignment and the polyA tail)
@@ -63,21 +98,22 @@ class Read:
         Tuple of cell types that the read belongs to
     """
 
-    PolyA = typing.NamedTuple(
-        "PolyA",
-        [
-            ("overhang", int),
-            ("length", int),
-            ("slack", int),
-        ],
-    )
+    @dataclass
+    class PolyA:
+        overhang: int = 0
+        length: int = 0
+        slack: int = 0
+        def __post_init__(self):
+            assert self.overhang >= 0
+            assert self.length >= 0
+            assert self.slack >= 0
 
     def __init__(
         self,
         idx: int,
         name: str,
         strand: str,
-        intervals: list[paired_interval_t],
+        intervals: list[PairedInterval],
         qlen: int,
         polyAs: tuple[PolyA, PolyA],
         cell_types: tuple[str, ...],
@@ -91,14 +127,11 @@ class Read:
         self.cell_types = cell_types
 
 
-Tint = typing.NamedTuple(
-    "Tint",
-    [
-        ("contig", str),
-        ("tid", int),
-        ("reads", list[Read]),
-    ],
-)
+@dataclass
+class Tint:
+    contig: str
+    tid: int
+    reads: list[Read] = list()
 
 
 class FredSplit:
@@ -148,74 +181,58 @@ class FredSplit:
         Generator[Tint, None, None]
             Generator of transcriptional intervals
         """
-        BasicInterval = NamedTuple(
-            "BasicInterval",
-            [
-                ("start", int),
-                ("end", int),
-                ("rids", list[int]),
-            ],
-        )
 
-        bintervals: list[BasicInterval] = list()
+        intervals: list[IntervalRIDs] = list()
         start: int = -1
         end: int = -1
-        bint_rids: list[int] = list()
-        rid_to_bints: dict[int, list[int]] = {read.idx: list() for read in reads}
+        cur_rids: list[int] = list()
+        rid_to_int_idx: dict[int, list[int]] = {read.idx: list() for read in reads}
         for s, e, rid in sorted(
-            (I.ts, I.te, read.idx) for read in reads for I in read.intervals
+            (I.target.start, I.target.end, read.idx)
+            for read in reads
+            for I in read.intervals
         ):
             if (start, end) == (-1, -1):
                 start, end = s, e
             if s > end:
-                bintervals.append(
-                    BasicInterval(
-                        start=start,
-                        end=end,
-                        rids=bint_rids,
-                    )
-                )
+                intervals.append(IntervalRIDs(start, end, cur_rids))
                 start = s
                 end = e
-                bint_rids = list()
+                cur_rids = list()
             assert start <= s
             end = max(end, e)
-            bint_rids.append(rid)
-            rid_to_bints[rid].append(len(bintervals))
+            cur_rids.append(rid)
+            rid_to_int_idx[rid].append(len(intervals))
         if (start, end) == (-1, -1):
             return
-        bintervals.append(
-            BasicInterval(
-                start=start,
-                end=end,
-                rids=bint_rids,
-            )
-        )
+        intervals.append(IntervalRIDs(start, end, cur_rids))
 
-        enqueued = [False for _ in bintervals]
-        bint_idx: int
+        enqueued = [False for _ in intervals]
         # Breadth-first search
-        for bint_idx in range(len(bintervals)):
-            if enqueued[bint_idx]:
+        for int_idx in range(len(intervals)):
+            if enqueued[int_idx]:
                 continue
             group: list[int] = list()
             queue: deque[int] = deque()
-            queue.append(bint_idx)
-            enqueued[bint_idx] = True
+            queue.append(int_idx)
+            enqueued[int_idx] = True
             while len(queue) > 0:
-                bint_idx = queue.pop()
-                group.append(bint_idx)
-                for rid in bintervals[bint_idx].rids:
-                    for bint_idx in rid_to_bints[rid]:
-                        if not enqueued[bint_idx]:
-                            enqueued[bint_idx] = True
-                            queue.append(bint_idx)
+                int_idx = queue.pop()
+                group.append(int_idx)
+                for rid in intervals[int_idx].rids:
+                    for int_idx in rid_to_int_idx[rid]:
+                        if not enqueued[int_idx]:
+                            enqueued[int_idx] = True
+                            queue.append(int_idx)
             tint_rids: set[int] = set()
             group_intervals: list[tuple[int, int]] = list()
-            for bint_idx in group:
-                tint_rids.update(bintervals[bint_idx].rids)
+            for int_idx in group:
+                tint_rids.update(intervals[int_idx].rids)
                 group_intervals.append(
-                    (bintervals[bint_idx].start, bintervals[bint_idx].end)
+                    (
+                        intervals[int_idx].start,
+                        intervals[int_idx].end,
+                    )
                 )
             tint = Tint(
                 contig=contig,
@@ -303,7 +320,7 @@ class FredSplit:
                     canonized_cigar.append((op, l))
         return canonized_cigar
 
-    def get_intervals(self, aln) -> list[paired_interval_t]:
+    def get_intervals(self, aln) -> list[PairedInterval]:
         """
         Returns a list of intervals of the alignment.
         Each interval is a tuple of (target_start, target_end, query_start, query_end)
@@ -324,19 +341,9 @@ class FredSplit:
             if op in [CIGAR_OPS_SIMPLE.query, CIGAR_OPS_SIMPLE.both]:
                 qlen += l
         assert qlen == len(aln.query_sequence)
-        p_interval_wc = NamedTuple(
-            "paired_interval_with_cigar",
-            [
-                ("qs", int),
-                ("qe", int),
-                ("ts", int),
-                ("te", int),
-                ("cigar", list[tuple[CIGAR_OPS_SIMPLE, int]]),
-            ],
-        )
-        intervals: list[
-            p_interval_wc
-        ] = list()  # list of exonic intervals of the alignment
+
+        # list of exonic intervals of the alignment
+        intervals: list[PairedIntervalCigar] = list()
 
         qstart: int = 0  # current interval's start on query
         qend: int = 0  # current interval's end on query
@@ -357,22 +364,20 @@ class FredSplit:
                     tend += l
             if not is_splice:
                 intervals.append(
-                    p_interval_wc(
-                        ts=tstart,
-                        te=tend,
-                        qs=qstart,
-                        qe=qend,
+                    PairedIntervalCigar(
+                        query=Interval(qstart, qend),
+                        target=Interval(tstart, tend),
                         cigar=cur_cigar,
                     )
                 )
             qstart = qend
             tstart = tend
-        final_intervals: list[paired_interval_t] = list()
+        final_intervals: list[PairedInterval] = list()
         for interval in intervals:
-            qs = interval.qs
-            qe = interval.qe
-            ts = interval.ts
-            te = interval.te
+            qs = interval.query.start
+            qe = interval.query.end
+            ts = interval.target.start
+            te = interval.target.end
             cigar = interval.cigar
             assert qe - qs == (
                 S := sum(
@@ -403,12 +408,7 @@ class FredSplit:
                 elif op == CIGAR_OPS_SIMPLE.target:
                     te -= l
             final_intervals.append(
-                paired_interval_t(
-                    qs=qs,
-                    qe=qe,
-                    ts=ts,
-                    te=te,
-                )
+                PairedInterval(query=Interval(qs, qe), target=Interval(ts, te))
             )
         return final_intervals
 
@@ -441,8 +441,12 @@ class FredSplit:
             qname: str = str(aln.query_name)
             seq = str(aln.query_sequence)
             intervals = self.get_intervals(aln)
-            lpA_a, lpA_b, lpA_c = self.find_longest_polyA(seq[: intervals[0].qs])
-            rpA_a, rpA_b, rpA_c = self.find_longest_polyA(seq[intervals[-1].qe :])
+            lpA_a, lpA_b, lpA_c = self.find_longest_polyA(
+                seq[: intervals[0].query.start]
+            )
+            rpA_a, rpA_b, rpA_c = self.find_longest_polyA(
+                seq[intervals[-1].query.end :]
+            )
             polyAs = (
                 Read.PolyA(
                     overhang=lpA_a,
@@ -465,8 +469,8 @@ class FredSplit:
                 cell_types=self.qname_to_celltypes[qname],
             )
             self.read_count += 1
-            s = intervals[0].ts
-            e = intervals[-1].te
+            s = intervals[0].target.start
+            e = intervals[-1].target.end
             if (start, end) == (-1, -1):
                 start, end = s, e
             if s > end:
@@ -485,7 +489,7 @@ class FredSplit:
     ) -> Generator[Tint, None, None]:
         sam = pysam.AlignmentFile(sam_path, "rb")
         contigs: list[str] = [
-            x["SN"] for x in sam.header["SQ"] if x["LN"] > self.contig_min_len
+            x["SN"] for x in sam.header.to_dict()["SQ"] if x["LN"] > self.contig_min_len
         ]
         for contig in contigs:
             for reads in self.overlapping_reads(sam, contig):

@@ -1,9 +1,9 @@
 from collections import Counter, defaultdict
 import enum
 from itertools import groupby
-import typing
+from typing import Union, Iterable
 
-from freddie.split import Read, paired_interval_t
+from freddie.split import Read, PairedInterval, Interval
 
 from matplotlib import pyplot as plt
 import numpy as np
@@ -11,28 +11,39 @@ import numpy.typing as npt
 import cgranges
 
 
-class canonInts:
+class aln_t(enum.IntEnum):
+    """
+    An enum to represent the type of an interval
+    """
+
+    unaln = 0
+    intron = 1
+    polyA = 2
+    exon = 3
+
+
+class CanonIntervals:
     """
     A class to represent a set of canoninal intervals of a set of read alignments
 
     Attributes
     ----------
-    intervals : list[canonInts.cinterval]
+    intervals : list[CanonIntervals.CanonInterval]
         list of intervals
     matrix : npt.NDArray[np.uint8]
         matrix representation of the intervals
 
     Methods
     -------
-    make_cintervals(reads: list[Read]) -> list[canonInts.cinterval]
+    make_cintervals(reads: list[Read]) -> list[CanonIntervals.CanonInterval]
         make the intervals from a list of reads
     extend(recompute_matrix=True)
         extend the first/last exons of the reads as far as no intron of another read is crossed
     compress(recompute_matrix=True)
         merge adjacent intervals with the same sets of reads
-    substring(i: typing.Union[int, None], j: typing.Union[int, None]) -> canonInts
-        return a new canonInts object with the intervals i to j
-    split_on_freq(min_freq=0.50) -> tuple[canonInts, canonInts]
+    substring(i: Union[int, None], j: Union[int, None]) -> CanonIntervals
+        return a new CanonIntervals object with the intervals i to j
+    split_on_freq(min_freq=0.50) -> tuple[CanonIntervals, CanonIntervals]
         split the intervals on the frequency of the reads
     get_matrix() -> npt.NDArray[np.uint8]
         return the matrix representation of the intervals
@@ -42,38 +53,25 @@ class canonInts:
         remove intervals shorter than min_len
     """
 
-    class aln_t(enum.IntEnum):
-        """
-        An enum to represent the type of an interval
-        """
-
-        unaln = 0
-        intron = 1
-        polyA = 2
-        exon = 3
-
-    class cinterval:
+    class CanonInterval(Interval):
         """
         A class to represent a single canonical interval
 
         Attributes
         ----------
-        start : int
-            start position of the interval
-        end : int
-            end position of the interval
-        _type_to_ridxs : dict[canonInts.aln_t, set[int]]
+
+        _type_to_ridxs : dict[aln_t, set[int]]
             dictionary mapping the type alignment to the set of reads
             with that type of alignment on the interval
-        _ridx_to_type : dict[int, canonInts.aln_t]
+        _ridx_to_type : dict[int, aln_t]
             dictionary mapping the read id to the type of alignment it
             has on the interval
 
         Methods
         -------
-        add_ridx(ridx: int, t: canonInts.aln_t)
+        add_ridx(ridx: int, t: aln_t)
             add a read with a type of alignment to the interval
-        add_ridxs(ridxs: typing.Iterable[int], t: canonInts.aln_t)
+        add_ridxs(ridxs: Iterable[int], t: aln_t)
             add a set of reads with a type of alignment to the interval
         intronic_ridxs() -> set[int]
             return the set of reads with an intronic alignment on the interval
@@ -81,43 +79,40 @@ class canonInts:
             return the set of reads with an exonic alignment on the interval
         ridxs() -> set[int]
             return the set of reads with an alignment on the interval
-        change_ridx_type(ridx: int, t: canonInts.aln_t)
+        change_ridx_type(ridx: int, t: aln_t)
             change the type of alignment of a read on the interval
-        change_ridxs_type(ridxs: set[int], t: canonInts.aln_t)
+        change_ridxs_type(ridxs: set[int], t: aln_t)
             change the type of alignment of a set of reads on the interval
         """
 
         def __init__(self, start: int, end: int) -> None:
-            self.start = start
-            self.end = end
-            self._type_to_ridxs: dict[canonInts.aln_t, set[int]] = {
-                t: set() for t in canonInts.aln_t
-            }
-            self._ridx_to_type: dict[int, canonInts.aln_t] = dict()
+            super().__init__(start=start, end=end)
+            self._type_to_ridxs: dict[aln_t, set[int]] = {t: set() for t in aln_t}
+            self._ridx_to_type: dict[int, aln_t] = dict()
 
-        def add_ridx(self, ridx: int, t: "canonInts.aln_t"):
+        def add_ridx(self, ridx: int, t: "aln_t"):
             """
             Add a read index with a type of alignment to the interval
 
             Parameters
             ----------
             ridx : int
-                read index in reads of the canonInts object
-            t : canonInts.aln_t
+                read index in reads of the CanonIntervals object
+            t : aln_t
                 type of alignment
             """
             self._type_to_ridxs[t].add(ridx)
             self._ridx_to_type[ridx] = t
 
-        def add_ridxs(self, ridxs: typing.Iterable[int], t: "canonInts.aln_t"):
+        def add_ridxs(self, ridxs: Iterable[int], t: "aln_t"):
             """
             Add a set of read indices with a type of alignment to the interval
 
             Parameters
             ----------
             ridxs : set[int]
-                read indices in reads of the canonInts object
-            t : canonInts.aln_t
+                read indices in reads of the CanonIntervals object
+            t : aln_t
                 type of alignment
             """
             for ridx in ridxs:
@@ -131,7 +126,7 @@ class canonInts:
             -------
             set[int]
             """
-            return self._type_to_ridxs[canonInts.aln_t.intron]
+            return self._type_to_ridxs[aln_t.intron]
 
         def exonic_ridxs(self) -> set[int]:
             """
@@ -141,7 +136,7 @@ class canonInts:
             -------
             set[int]
             """
-            return self._type_to_ridxs[canonInts.aln_t.exon]
+            return self._type_to_ridxs[aln_t.exon]
 
         def ridxs(self) -> set[int]:
             """
@@ -153,31 +148,31 @@ class canonInts:
             """
             return set(self._ridx_to_type.keys())
 
-        def change_ridx_type(self, ridx: int, t: "canonInts.aln_t") -> None:
+        def change_ridx_type(self, ridx: int, aln: "aln_t") -> None:
             """
             Change the type of alignment of a read on the interval
 
             Parameters
             ----------
             ridx : int
-                read index in reads list of the canonInts object
-            t : canonInts.aln_t
+                read index in reads list of the CanonIntervals object
+            t : aln_t
                 type of target alignment
             """
-            old_t = self._ridx_to_type.get(ridx, canonInts.aln_t.unaln)
-            self._type_to_ridxs[old_t].discard(ridx)
-            self._type_to_ridxs[t].add(ridx)
-            self._ridx_to_type[ridx] = t
+            old_aln = self._ridx_to_type.get(ridx, aln_t.unaln)
+            self._type_to_ridxs[old_aln].discard(ridx)
+            self._type_to_ridxs[aln].add(ridx)
+            self._ridx_to_type[ridx] = aln
 
-        def change_ridxs_type(self, ridxs: set[int], t: "canonInts.aln_t") -> None:
+        def change_ridxs_type(self, ridxs: set[int], t: "aln_t") -> None:
             """
             Change the type of alignment of a set of reads on the interval
 
             Parameters
             ----------
             ridxs : set[int]
-                read indices in reads list of the canonInts object
-            t : canonInts.aln_t
+                read indices in reads list of the CanonIntervals object
+            t : aln_t
                 type of target alignment
             """
             for ridx in ridxs:
@@ -215,8 +210,8 @@ class canonInts:
 
     @staticmethod
     def make_cintervals(
-        intervals_iter: typing.Iterable[list[paired_interval_t]],
-    ) -> list["canonInts.cinterval"]:
+        intervals_iter: Iterable[list[PairedInterval]],
+    ) -> list["CanonIntervals.CanonInterval"]:
         """
         Make the canonical intervals from a list of reads
 
@@ -227,32 +222,32 @@ class canonInts:
 
         Returns
         -------
-        list[canonInts.cinterval]:
+        list[CanonIntervals.CanonInterval]:
             list of canonical intervals of the reads
         """
-        result: list[canonInts.cinterval] = list()
+        result: list[CanonIntervals.CanonInterval] = list()
         breakpoints_set: set[int] = set()
         g = cgranges.cgranges()
         for base1_idx, intervals in enumerate(intervals_iter, 1):
             for interval in intervals:
-                g.add("", interval.ts, interval.te, base1_idx)
-                breakpoints_set.add(interval.ts)
-                breakpoints_set.add(interval.te)
+                g.add("", interval.target.start, interval.target.end, base1_idx)
+                breakpoints_set.add(interval.target.start)
+                breakpoints_set.add(interval.target.end)
             for interval1, interval2 in zip(intervals[:-1], intervals[1:]):
-                g.add("", interval1.te, interval2.ts, -base1_idx)
+                g.add("", interval1.target.end, interval2.target.start, -base1_idx)
         g.index()
         breakpoints: list[int] = sorted(breakpoints_set)
         for start, end in zip(breakpoints[:-1], breakpoints[1:]):
-            cint = canonInts.cinterval(
+            cint = CanonIntervals.CanonInterval(
                 start=start,
                 end=end,
             )
             for _, _, base1_signed_idx in g.overlap("", start, end):
                 idx = abs(base1_signed_idx) - 1
                 if base1_signed_idx > 0:
-                    cint.add_ridx(idx, canonInts.aln_t.exon)
+                    cint.add_ridx(idx, aln_t.exon)
                 else:
-                    cint.add_ridx(idx, canonInts.aln_t.intron)
+                    cint.add_ridx(idx, aln_t.intron)
             result.append(cint)
         return result
 
@@ -313,7 +308,7 @@ class canonInts:
                         if self.polyA_slacks[ridx][polyA_idx] < next_length:
                             continue
                         self.polyA_slacks[ridx][polyA_idx] -= next_length
-                    next_cint.add_ridx(ridx, canonInts.aln_t.exon)
+                    next_cint.add_ridx(ridx, aln_t.exon)
 
         do_extend(reverse=False)
         do_extend(reverse=True)
@@ -329,7 +324,7 @@ class canonInts:
         recompute_matrix : bool, optional
             if True recompute the matrix representation of the intervals
         """
-        result: list[canonInts.cinterval] = list()
+        result: list[CanonIntervals.CanonInterval] = list()
         last = self.intervals[0]
         for curr in self.intervals[1:]:
             if (
@@ -339,12 +334,12 @@ class canonInts:
                 result.append(last)
                 last = curr
             else:
-                last = canonInts.cinterval(
+                last = CanonIntervals.CanonInterval(
                     start=last.start,
                     end=curr.end,
                 )
-                last.add_ridxs(curr.intronic_ridxs(), canonInts.aln_t.intron)
-                last.add_ridxs(curr.exonic_ridxs(), canonInts.aln_t.exon)
+                last.add_ridxs(curr.intronic_ridxs(), aln_t.intron)
+                last.add_ridxs(curr.exonic_ridxs(), aln_t.exon)
         result.append(last)
         self.intervals = result
         if recompute_matrix:
@@ -352,11 +347,11 @@ class canonInts:
 
     def substring(
         self,
-        i: typing.Union[int, None],
-        j: typing.Union[int, None],
-    ) -> "canonInts":
+        i: Union[int, None],
+        j: Union[int, None],
+    ) -> "CanonIntervals":
         """
-        Return a new canonInts object with the intervals i to j
+        Return a new CanonIntervals object with the intervals i to j
 
         Parameters
         ----------
@@ -367,15 +362,15 @@ class canonInts:
 
         Returns
         -------
-        canonInts
+        CanonIntervals
         """
 
         ridxs = set()
         for interval in self.intervals[i:j]:
             ridxs.update(interval.ridxs())
-        return canonInts([self.reads[ridx] for ridx in ridxs])
+        return CanonIntervals([self.reads[ridx] for ridx in ridxs])
 
-    def split_on_freq(self, min_freq=0.50) -> tuple["canonInts", "canonInts"]:
+    def split_on_freq(self, min_freq=0.50) -> tuple["CanonIntervals", "CanonIntervals"]:
         """
         Split the intervals on the frequency of the reads alignment type per interval.
         Any read with a frequency of alignment type below min_freq on any interval is dropped.
@@ -387,8 +382,8 @@ class canonInts:
 
         Returns
         -------
-        tuple[canonInts, canonInts]
-            tuple of two canonInts objects, the first with the reads above the threshold
+        tuple[CanonIntervals, CanonIntervals]
+            tuple of two CanonIntervals objects, the first with the reads above the threshold
             on every interval and the second with the reads below the threshold on any interval
         """
         drop_ridxs = set()
@@ -401,8 +396,8 @@ class canonInts:
             if len(S := interval.intronic_ridxs()) / interval_read_count <= min_freq:
                 drop_ridxs.update(S)
         keep_ridxs = set(range(len(self.reads))) - drop_ridxs
-        drop_cints = canonInts([self.reads[ridx] for ridx in sorted(drop_ridxs)])
-        keep_cints = canonInts([self.reads[ridx] for ridx in sorted(keep_ridxs)])
+        drop_cints = CanonIntervals([self.reads[ridx] for ridx in sorted(drop_ridxs)])
+        keep_cints = CanonIntervals([self.reads[ridx] for ridx in sorted(keep_ridxs)])
         return keep_cints, drop_cints
 
     def get_matrix(self) -> npt.NDArray[np.uint8]:
@@ -422,7 +417,7 @@ class canonInts:
     def compute_matrix(self):
         """
         Builds the matrix representation of the intervals. The matrix is stored in self.matrix.
-        The integer representation is defined by canonInts.aln_t.
+        The integer representation is defined by aln_t.
         The matrix includes two additional columns for the polyA start and end at the beginning and end of the matrix.
         """
         self.matrix = np.full(
@@ -430,7 +425,7 @@ class canonInts:
                 len(self.reads),
                 len(self.intervals) + 2,
             ),
-            canonInts.aln_t.unaln,
+            aln_t.unaln,
             dtype=np.uint8,
         )
         for j, interval in enumerate(self.intervals, start=1):
@@ -438,9 +433,9 @@ class canonInts:
                 self.matrix[i, j] = val
         for i, read in enumerate(self.reads):
             if read.polyAs[0].length > 0:
-                self.matrix[i, 0] = canonInts.aln_t.polyA
+                self.matrix[i, 0] = aln_t.polyA
             if read.polyAs[1].length > 0:
-                self.matrix[i, -1] = canonInts.aln_t.polyA
+                self.matrix[i, -1] = aln_t.polyA
 
     def pop(self, min_len, extend=True, compress=True, recompute_matrix=False) -> None:
         """
@@ -466,7 +461,7 @@ class canonInts:
         if len(self.intervals) <= 1:
             return
 
-        def enum_cint_len(args: tuple[int, canonInts.cinterval]):
+        def enum_cint_len(args: tuple[int, CanonIntervals.CanonInterval]):
             _, cint = args
             return cint.end - cint.start
 
@@ -512,28 +507,25 @@ class canonInts:
                 for interval in self.intervals[idxs[0] : idxs[-1] + 1]:
                     length = interval.end - interval.start
                     for ridx in interval.exonic_ridxs():
-                        counter[ridx][canonInts.aln_t.exon] += length
+                        counter[ridx][aln_t.exon] += length
                     for ridx in interval.intronic_ridxs():
-                        counter[ridx][canonInts.aln_t.intron] += length
+                        counter[ridx][aln_t.intron] += length
                 for ridx in counter:
-                    if (
-                        counter[ridx][canonInts.aln_t.exon]
-                        > counter[ridx][canonInts.aln_t.intron]
-                    ):
+                    if counter[ridx][aln_t.exon] > counter[ridx][aln_t.intron]:
                         exonic_ridxs.add(ridx)
                     else:
                         intronic_ridxs.add(ridx)
-                self.intervals[idxs[0]] = canonInts.cinterval(
+                self.intervals[idxs[0]] = CanonIntervals.CanonInterval(
                     start=start,
                     end=end,
                 )
                 self.intervals[idxs[0]].add_ridxs(
                     exonic_ridxs,
-                    canonInts.aln_t.exon,
+                    aln_t.exon,
                 )
                 self.intervals[idxs[0]].add_ridxs(
                     intronic_ridxs,
-                    canonInts.aln_t.intron,
+                    aln_t.intron,
                 )
                 drop_idxs.update(idxs[1:])
         self.intervals = [x for i, x in enumerate(self.intervals) if i not in drop_idxs]
@@ -549,8 +541,8 @@ class canonInts:
         unique: bool = True,
         min_height: int = 5,
         figsize: tuple[int, int] = (15, 10),
-        out_prefix: typing.Union[str, None] = None,
-        read_bins: typing.Union[tuple[list[int], ...], None] = None,
+        out_prefix: Union[str, None] = None,
+        read_bins: Union[tuple[list[int], ...], None] = None,
     ):
         """
         Plot the intervals and the matrix representation of the intervals using matplotlib's imshow
