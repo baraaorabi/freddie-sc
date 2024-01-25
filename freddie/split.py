@@ -482,6 +482,7 @@ class FredSplit:
     def generate_all_tints(
         self,
         sam_path: str,
+        pbar: tqdm | None = None,
     ) -> Generator[Tint, None, None]:
         sam = pysam.AlignmentFile(sam_path, "rb")
         contigs: list[str] = [
@@ -490,9 +491,19 @@ class FredSplit:
             if x["LN"] > self.params.contig_min_len
         ]
         for contig in contigs:
+            if pbar is not None:
+                pbar.set_description(
+                    f"Detecting isoforms (genererating from contig {contig} out of {len(contigs)})"
+                )
+                pbar.refresh()
             for reads in self.overlapping_reads(sam, contig):
-                for tint in tqdm(
-                    self.get_tints(reads, contig),
-                    desc=f"Generating tints of contig {contig}",
-                ):
+                for tint in self.get_tints(reads, contig):
                     yield tint
+                    if pbar is not None:
+                        pbar.total += 1
+                        pbar.refresh()
+        if pbar is not None:
+            pbar.set_description(
+                f"Detecting isoforms (done generating from all {len(contigs)} contigs)"
+            )
+            pbar.refresh()

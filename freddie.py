@@ -1,14 +1,16 @@
+#!/usr/bin/env python
 import argparse
 import functools
 from multiprocessing import Pool
 import sys
+
+from tqdm import tqdm
 
 from freddie.ilp import IlpParams
 from freddie.isoforms import get_isoforms, Isoform, IsoformsParams
 from freddie.split import FredSplit, FredSplitParams
 
 import pulp
-from tqdm import tqdm
 
 
 def parse_args():
@@ -60,6 +62,11 @@ def parse_args():
         "--sort-output",
         action="store_true",
         help="Sort GTF output by genomic coordinate.",
+    )
+    parser.add_argument(
+        "--generate-all-tints-first",
+        action="store_true",
+        help="Generate all transcriptional intervals first, then detect isoforms. Default is to detect isoforms as Tints are generated.",
     )
     parser.add_argument(
         "--contig-min-len",
@@ -126,6 +133,8 @@ def parse_args():
     args.polyA_m_score, args.polyA_x_score = list(
         map(int, args.polyA_scores.split(","))
     )
+    delattr(args, "polyA_scores")
+
     assert 0 <= args.cigar_max_del
     assert 0 <= args.polyA_min_len
     assert 0 < args.contig_min_len
@@ -133,14 +142,15 @@ def parse_args():
     assert 0 < args.ilp_time_limit
     assert 0 < args.max_correction_len
     assert 0 < args.max_correction_count
+    print(f"[freddie] Args:", file=sys.stderr)
+    for arg in vars(args):
+        print(f"[freddiej]   {arg}: {getattr(args, arg)}", file=sys.stderr)
 
     return args
 
 
 def main():
     args = parse_args()
-
-    print(f"[freddie.py] Args:\n{args}", file=sys.stderr)
 
     split = FredSplit(
         params=FredSplitParams(
@@ -151,10 +161,6 @@ def main():
             contig_min_len=args.contig_min_len,
         ),
         rname_to_celltypes=args.rname_to_celltypes,
-    )
-    generate_all_tints_f = functools.partial(
-        split.generate_all_tints,
-        sam_path=args.bam,
     )
     get_isoforms_f = functools.partial(
         get_isoforms,
@@ -177,12 +183,13 @@ def main():
         outfile = open(args.output, "w+")
     if args.readnames_output is not None:
         args.readnames_output = open(args.readnames_output, "w+")
-    with Pool(args.threads) as pool:
-        for isoform_gen in tqdm(
-            pool.imap_unordered(get_isoforms_f, generate_all_tints_f()),
-            desc="All tint counter",
-        ):
-            for isoform in isoform_gen:
+    with Pool(args.threads) as pool, tqdm(desc="Detecting isoforms", total=1) as pbar:
+        tints = split.generate_all_tints(args.bam, pbar)
+        if args.generate_all_tints_first:
+            tints = list(tints)
+        for isoforms in pool.imap_unordered(get_isoforms_f, tints):
+            pbar.update(1)
+            for isoform in isoforms:
                 if args.sort_output:
                     all_isoforms.append(isoform)
                 else:

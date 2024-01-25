@@ -158,8 +158,8 @@ class Isoform:
 
 def get_isoforms(
     tint: Tint,
-    params: IsoformsParams = IsoformsParams(),
-) -> Generator[Isoform, None, None]:
+    params: IsoformsParams = IsoformsParams()
+) -> list[Isoform]:
     """
     Get isoforms for the given Tint.
 
@@ -172,6 +172,7 @@ def get_isoforms(
     """
     assert params.min_read_support > 0
     reads: list[Read] = tint.reads
+    isoforms = list()
     for isoform_index in range(params.max_isoform_count):
         recycling_reads, isoform_reads = run_ilp(reads, params)
         if len(isoform_reads) < params.min_read_support:
@@ -182,11 +183,12 @@ def get_isoforms(
             reads=isoform_reads,
             isoform_index=isoform_index,
         )
-        yield isoform
+        isoforms.append(isoform)
         # Remove the reads that were used to construct the isoform
         reads = recycling_reads
         if len(reads) < params.min_read_support:
             break
+    return isoforms
 
 
 def run_ilp(reads: list[Read], params: IsoformsParams) -> tuple[list[Read], list[Read]]:
