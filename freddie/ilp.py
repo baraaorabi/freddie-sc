@@ -201,6 +201,8 @@ class FredILP:
                 )
         # Setting up C2IR and C2I vars
         for k in range(1, K):  # Start from k=1; no constraint on the garbage isoform
+            # Add two extra intervals of no coverage at the start and end
+            # of the isoform to account to ensure that CHANGE2I is at least 2
             for j in [-1, M]:
                 C2I[j, k] = pulp.LpVariable(
                     name=f"C2I_{'n' if j < 0 else ''}{abs(j)},{k}",
@@ -218,7 +220,7 @@ class FredILP:
                         cat=pulp.LpBinary,
                     )
                     self.model += C2IR[j, k, i] == (
-                        self.R2I[i, k] * self.rows[i][j] != aln_t.unaln
+                        self.R2I[i, k] * (self.rows[i][j] != aln_t.unaln)
                     )
                 # C2I[j, k] = max over of C2IR[j, k, i] for each read i
                 self.ilp_max_binary(
@@ -232,12 +234,10 @@ class FredILP:
                     name=f"CHANGE2I_{'n' if j < 0 else ''}{abs(j)},{k}",
                     cat=pulp.LpBinary,
                 )
-                x = C2I[j, k]
-                y = C2I[j + 1, k]
                 self.ilp_xor_binary(
                     lhs_var=CHANGE2I[j, k],
-                    x=x,
-                    y=y,
+                    x=C2I[j, k],
+                    y=C2I[j + 1, k],
                 )
         # Setting up I2T vars
         for k in range(1, K):
@@ -333,7 +333,6 @@ class FredILP:
                         <= slack
                     )
 
-
         # ----------------------- Objective function -------------------------
         OBJ: dict[tuple[int, int, int], pulp.LpVariable] = dict()
         OBJ_SUM = pulp.lpSum(0.0)
@@ -378,7 +377,7 @@ class FredILP:
         self.model.solve(solver=solver)
         status = self.model.status
         bins: tuple[list[int], ...] = tuple(list() for _ in range(self.K))
-        isoforms: tuple[list[aln_t], ...] = tuple(list() for _ in range(self.K))
+        bin_structures: tuple[list[aln_t], ...] = tuple(list() for _ in range(self.K))
 
         if status == pulp.LpStatusOptimal:
             for k in range(self.K):
@@ -390,5 +389,5 @@ class FredILP:
                 for j in range(len(self.interval_lengths)):
                     val = self.E2I[j, k].varValue
                     assert val != None, f"Unsolved variable, {self.E2I[j, k]}"
-                    isoforms[k].append(aln_t.exon if val > 0.5 else aln_t.intron)
-        return self.model.status, isoforms, bins
+                    bin_structures[k].append(aln_t.exon if val > 0.5 else aln_t.intron)
+        return self.model.status, bin_structures, bins
