@@ -3,14 +3,19 @@ import functools
 from multiprocessing import Pool
 import sys
 
-from freddie.isoforms import get_isoforms, Isoform, ClusteringParams
-from freddie.split import FredSplit
+from freddie.ilp import IlpParams
+from freddie.isoforms import get_isoforms, Isoform, IsoformsParams
+from freddie.split import FredSplit, FredSplitParams
 
 import pulp
 from tqdm import tqdm
 
 
 def parse_args():
+    split_params = FredSplitParams()
+    isoform_params = IsoformsParams()
+    ilp_params = IlpParams()
+
     parser = argparse.ArgumentParser(
         description="scFreddie: Detecting isoforms from single-cell long-read RNA-seq data",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
@@ -32,49 +37,6 @@ def parse_args():
         + "Cell types are comma-separated and can be strings (with no commas!).",
     )
     parser.add_argument(
-        "-t",
-        "--threads",
-        default=1,
-        type=int,
-        help="Number of threads.",
-    )
-    parser.add_argument(
-        "--contig-min-len",
-        default=1_000_000,
-        type=int,
-        help="Minimum contig size. Any contig with less size will not be processes.",
-    )
-    parser.add_argument(
-        "--cigar-max-del",
-        default=20,
-        type=int,
-        help="Maximum deletion size in CIGAR. Deletions (or N operators) longer than this will trigger a splice split.",
-    )
-    parser.add_argument(
-        "--polyA-min-len",
-        default=10,
-        type=int,
-        help="Minimum polyA length. Any polyA shorter than this will be ignored.",
-    )
-    parser.add_argument(
-        "--polyA-scores",
-        default="1,-2",
-        type=str,
-        help="PolyA scores. Comma-separated scores for matching and mismatching bases.",
-    )
-    parser.add_argument(
-        "--max-isoform-count",
-        default=20,
-        type=int,
-        help="Maximum number of isoforms to output per transcriptional interval (i.e. ~gene).",
-    )
-    parser.add_argument(
-        "--min-read-support",
-        default=3,
-        type=int,
-        help="Minimum number of reads supporting an isoform.",
-    )
-    parser.add_argument(
         "-o",
         "--output",
         type=str,
@@ -82,29 +44,17 @@ def parse_args():
         help="Path to output file. Default: stdout",
     )
     parser.add_argument(
-        "--ilp-time-limit",
+        "-t",
+        "--threads",
+        default=1,
         type=int,
-        default=5 * 60,
-        help="Time limit for ILP solver in seconds.",
+        help="Number of threads.",
     )
     parser.add_argument(
-        "--max-correction-len",
-        type=int,
-        default=20,
-        help="Maximum length of canonical intervals correction in each read.",
-    )
-    parser.add_argument(
-        "--max-correction-count",
-        type=int,
-        default=3,
-        help="Maximum number of canonical intervals correction in each read.",
-    )
-    parser.add_argument(
-        "--ilp-solver",
+        "--readnames-output",
+        default=None,
         type=str,
-        default="COIN_CMD",
-        choices=pulp.listSolvers(onlyAvailable=True),
-        help="ILP solver.",
+        help="Output path for TSV with isoform_id and read_name columns.",
     )
     parser.add_argument(
         "--sort-output",
@@ -112,10 +62,65 @@ def parse_args():
         help="Sort GTF output by genomic coordinate.",
     )
     parser.add_argument(
-        "--readnames-output",
-        default=None,
+        "--contig-min-len",
+        default=split_params.contig_min_len,
+        type=int,
+        help="Minimum contig size. Any contig with less size will not be processes.",
+    )
+    parser.add_argument(
+        "--cigar-max-del",
+        default=split_params.cigar_max_del,
+        type=int,
+        help="Maximum deletion size in CIGAR. Deletions (or N operators) longer than this will trigger a splice split.",
+    )
+    parser.add_argument(
+        "--polyA-min-len",
+        default=split_params.polyA_min_len,
+        type=int,
+        help="Minimum polyA length. Any polyA shorter than this will be ignored.",
+    )
+    parser.add_argument(
+        "--polyA-scores",
+        default=f"{split_params.polyA_m_score},{split_params.polyA_x_score}",
         type=str,
-        help="Output path for TSV with isoform_id and read_name columns.",
+        help="PolyA scores. Comma-separated scores for matching and mismatching bases.",
+    )
+    parser.add_argument(
+        "--max-isoform-count",
+        default=isoform_params.max_isoform_count,
+        type=int,
+        help="Maximum number of isoforms to output per transcriptional interval (i.e. ~gene).",
+    )
+    parser.add_argument(
+        "--min-read-support",
+        default=isoform_params.min_read_support,
+        type=int,
+        help="Minimum number of reads supporting an isoform.",
+    )
+    parser.add_argument(
+        "--ilp-time-limit",
+        type=int,
+        default=ilp_params.timeLimit,
+        help="Time limit for ILP solver in seconds.",
+    )
+    parser.add_argument(
+        "--max-correction-len",
+        type=int,
+        default=ilp_params.max_correction_len,
+        help="Maximum length of canonical intervals correction in each read.",
+    )
+    parser.add_argument(
+        "--max-correction-count",
+        type=int,
+        default=ilp_params.max_correction_count,
+        help="Maximum number of canonical intervals correction in each read.",
+    )
+    parser.add_argument(
+        "--ilp-solver",
+        type=str,
+        default=ilp_params.ilp_solver,
+        choices=pulp.listSolvers(onlyAvailable=True),
+        help="ILP solver.",
     )
     args = parser.parse_args()
     args.polyA_m_score, args.polyA_x_score = list(
@@ -138,11 +143,13 @@ def main():
     print(f"[freddie.py] Args:\n{args}", file=sys.stderr)
 
     split = FredSplit(
-        cigar_max_del=args.cigar_max_del,
-        polyA_m_score=args.polyA_m_score,
-        polyA_x_score=args.polyA_x_score,
-        polyA_min_len=args.polyA_min_len,
-        contig_min_len=args.contig_min_len,
+        params=FredSplitParams(
+            cigar_max_del=args.cigar_max_del,
+            polyA_m_score=args.polyA_m_score,
+            polyA_x_score=args.polyA_x_score,
+            polyA_min_len=args.polyA_min_len,
+            contig_min_len=args.contig_min_len,
+        ),
         rname_to_celltypes=args.rname_to_celltypes,
     )
     generate_all_tints_f = functools.partial(
@@ -151,13 +158,15 @@ def main():
     )
     get_isoforms_f = functools.partial(
         get_isoforms,
-        params=ClusteringParams(
-            ilp_time_limit=args.ilp_time_limit,
-            max_correction_len=args.max_correction_len,
-            max_correction_count=args.max_correction_count,
-            ilp_solver=args.ilp_solver,
+        params=IsoformsParams(
             max_isoform_count=args.max_isoform_count,
             min_read_support=args.min_read_support,
+            ilp_params=IlpParams(
+                timeLimit=args.ilp_time_limit,
+                max_correction_len=args.max_correction_len,
+                max_correction_count=args.max_correction_count,
+                ilp_solver=args.ilp_solver,
+            ),
         ),
     )
 

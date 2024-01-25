@@ -2,7 +2,7 @@ import functools
 from typing import Generator
 from dataclasses import dataclass
 
-from freddie.ilp import FredILP
+from freddie.ilp import FredILP, IlpParams
 from freddie.segment import CanonIntervals, PairedInterval, aln_t
 from freddie.split import Interval, Read, Tint
 
@@ -11,13 +11,10 @@ import pulp
 
 
 @dataclass
-class ClusteringParams:
-    ilp_time_limit: int = 5 * 60
-    max_correction_len: int = 20
-    max_correction_count: int = 3
-    ilp_solver: str = "COIN_CMD"
+class IsoformsParams:
     max_isoform_count: int = 20
     min_read_support: int = 3
+    ilp_params: IlpParams = IlpParams()
 
 
 @dataclass
@@ -161,14 +158,14 @@ class Isoform:
 
 def get_isoforms(
     tint: Tint,
-    params: ClusteringParams = ClusteringParams(),
+    params: IsoformsParams = IsoformsParams(),
 ) -> Generator[Isoform, None, None]:
     """
     Get isoforms for the given Tint.
 
     Args:
         tint: Tint
-        ilp_settings: ILP settings namedtuple
+        params: Isoform params dataclass
 
     Yields:
         Isoform
@@ -192,10 +189,7 @@ def get_isoforms(
             break
 
 
-def run_ilp(
-    reads: list[Read],
-    params: ClusteringParams,
-) -> tuple[list[Read], list[Read]]:
+def run_ilp(reads: list[Read], params: IsoformsParams) -> tuple[list[Read], list[Read]]:
     """
     Run ILP with the given reads and return the recycling reads and isoform reads.
     If the ILP fails to find an optimal solution, iteratively keep halving the
@@ -204,7 +198,7 @@ def run_ilp(
 
     Args:
         reads: List of reads
-        ilp_settings: ILP settings namedtuple
+        params: Isoforms params dataclass
 
     Returns:
         recycling_reads: List of recycling reads
@@ -219,16 +213,9 @@ def run_ilp(
         canon_ints = CanonIntervals(sample_reads)
         for i in range(10):
             canon_ints.pop(i)
-        ilp: FredILP = FredILP(canon_ints)
-        ilp.build_model(
-            K=2,
-            max_corrections=params.max_correction_count,
-            slack=params.max_correction_len,
-        )
-        status, vects, bins = ilp.solve(
-            solver=params.ilp_solver,
-            timeLimit=params.ilp_time_limit,
-        )
+        ilp: FredILP = FredILP(canon_ints, params.ilp_params)
+        ilp.build_model(K=2)
+        status, vects, bins = ilp.solve()
         assert len(vects) == len(bins) == 2, f"Expected 2 bins, got {len(bins)}"
         recycling_bin, isoform_bin = bins
         isoform_vect = vects[1]
@@ -242,7 +229,7 @@ def run_ilp(
                 incompatible_reads, compatible_reads = get_compatible_reads_bins(
                     unsampled_reads=unsampled_reads,
                     isoform_reads=isoform_reads,
-                    slack=params.max_correction_len,
+                    slack=params.ilp_params.max_correction_len,
                     canon_ints=canon_ints,
                     i_vect=isoform_vect,
                 )

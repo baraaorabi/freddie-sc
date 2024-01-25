@@ -3,7 +3,7 @@ from functools import total_ordering
 from itertools import groupby
 from collections import Counter, defaultdict, deque
 from typing import Generator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import pysam
 from tqdm import tqdm
@@ -45,18 +45,18 @@ class Interval:
 
 @dataclass
 class PairedInterval:
-    query: Interval = Interval()
-    target: Interval = Interval()
+    query: Interval = field(default_factory=Interval)
+    target: Interval = field(default_factory=Interval)
 
 
 @dataclass
 class PairedIntervalCigar(PairedInterval):
-    cigar: list[tuple[CIGAR_OPS_SIMPLE, int]] = list()
+    cigar: list[tuple[CIGAR_OPS_SIMPLE, int]] = field(default_factory=list)
 
 
 @dataclass
 class IntervalRIDs(Interval):
-    rids: list[int] = list()
+    rids: list[int] = field(default_factory=list)
 
 
 op_simply: dict[int, CIGAR_OPS_SIMPLE] = {
@@ -103,6 +103,7 @@ class Read:
         overhang: int = 0
         length: int = 0
         slack: int = 0
+
         def __post_init__(self):
             assert self.overhang >= 0
             assert self.length >= 0
@@ -131,24 +132,25 @@ class Read:
 class Tint:
     contig: str
     tid: int
-    reads: list[Read] = list()
+    reads: list[Read] = field(default_factory=list)
+
+
+@dataclass
+class FredSplitParams:
+    cigar_max_del: int = 20
+    polyA_m_score: int = 1
+    polyA_x_score: int = -2
+    polyA_min_len: int = 10
+    contig_min_len: int = 1_000_000
 
 
 class FredSplit:
     def __init__(
         self,
-        cigar_max_del: int,
-        polyA_m_score: int,
-        polyA_x_score: int,
-        polyA_min_len: int,
-        contig_min_len: int,
+        params: FredSplitParams = FredSplitParams(),
         rname_to_celltypes: None | str = None,
     ) -> None:
-        self.cigar_max_del = cigar_max_del
-        self.polyA_m_score = polyA_m_score
-        self.polyA_x_score = polyA_x_score
-        self.polyA_min_len = polyA_min_len
-        self.contig_min_len = contig_min_len
+        self.params = params
         self.read_count = 0
         self.tint_count = 0
         self.qname_to_celltypes: defaultdict[str, tuple[str, ...]] = defaultdict(tuple)
@@ -162,12 +164,7 @@ class FredSplit:
                     ct_set.add(ct)
                 self.qname_to_celltypes[read_name] = tuple(ct_set)
 
-    def get_transcriptional_intervals(
-        self,
-        reads: list[Read],
-        contig: str,
-        min_read_support: int,
-    ) -> Generator[Tint, None, None]:
+    def get_tints(self, reads: list[Read], contig: str) -> Generator[Tint, None, None]:
         """
         Yields connected transcriptional intervals from a list of reads
 
@@ -240,8 +237,6 @@ class FredSplit:
                 reads=[read for read in reads if read.idx in tint_rids],
             )
             assert len(tint.reads) == len(tint_rids)
-            if len(tint.reads) < min_read_support:
-                continue
             yield tint
             self.tint_count += 1
         assert all(enqueued)
@@ -267,11 +262,12 @@ class FredSplit:
         max_length = 0
         for char in "AT":
             if seq[0] == char:
-                scores = [self.polyA_m_score]
+                scores = [self.params.polyA_m_score]
             else:
                 scores = [0]
             for m in (
-                self.polyA_m_score if c == char else self.polyA_x_score for c in seq[1:]
+                self.params.polyA_m_score if c == char else self.params.polyA_x_score
+                for c in seq[1:]
             ):
                 scores.append(max(0, scores[-1] + m))
 
@@ -283,7 +279,7 @@ class FredSplit:
                 last_idx += 1
                 first_idx = idxs[0]
                 length = last_idx - first_idx
-                if length > max_length and length >= self.polyA_min_len:
+                if length > max_length and length >= self.params.polyA_min_len:
                     max_length = length
                     result = (first_idx, length, len(seq) - last_idx)
         return result
@@ -351,7 +347,8 @@ class FredSplit:
         tend: int = tstart  # current interval's end on target
         for is_splice, g in groupby(
             cigar,
-            key=lambda x: x[0] == CIGAR_OPS_SIMPLE.target and x[1] > self.cigar_max_del,
+            key=lambda x: x[0] == CIGAR_OPS_SIMPLE.target
+            and x[1] > self.params.cigar_max_del,
         ):
             cur_cigar = list(g)
             for op, l in cur_cigar:
@@ -485,16 +482,17 @@ class FredSplit:
     def generate_all_tints(
         self,
         sam_path: str,
-        min_read_support: int = 3,
     ) -> Generator[Tint, None, None]:
         sam = pysam.AlignmentFile(sam_path, "rb")
         contigs: list[str] = [
-            x["SN"] for x in sam.header.to_dict()["SQ"] if x["LN"] > self.contig_min_len
+            x["SN"]
+            for x in sam.header.to_dict()["SQ"]
+            if x["LN"] > self.params.contig_min_len
         ]
         for contig in contigs:
             for reads in self.overlapping_reads(sam, contig):
                 for tint in tqdm(
-                    self.get_transcriptional_intervals(reads, contig, min_read_support),
+                    self.get_tints(reads, contig),
                     desc=f"Generating tints of contig {contig}",
                 ):
                     yield tint

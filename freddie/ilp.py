@@ -1,4 +1,5 @@
 from collections import defaultdict
+from dataclasses import dataclass
 from itertools import groupby
 from typing import Generator
 
@@ -14,8 +15,18 @@ ALN_T_MAP = {
 }
 
 
+@dataclass
+class IlpParams:
+    timeLimit: int = 5 * 60
+    max_correction_len: int = 20
+    max_correction_count: int = 3
+    ilp_solver: str = "COIN_CMD"
+    ilp_threads: int = 1
+
+
 class FredILP:
-    def __init__(self, cints: CanonIntervals):
+    def __init__(self, cints: CanonIntervals, params: IlpParams = IlpParams()):
+        self.params = params
         data_to_ridxs: defaultdict[
             tuple[tuple[aln_t, ...], tuple[str, ...]],
             list[int],
@@ -97,8 +108,6 @@ class FredILP:
     def build_model(
         self,
         K: int = 2,
-        slack: int = 20,
-        max_corrections: int = 3,
     ) -> None:
         ## Some constants ##
         ct_to_ctidx: dict[str, int] = dict()
@@ -322,7 +331,7 @@ class FredILP:
                 for k in range(1, K):
                     self.model += (
                         GAPI[(j1, j2, k)] - MAX_ISOFORM_LG * (1 - self.R2I[i, k])
-                        <= slack
+                        <= self.params.max_correction_len
                     )
 
         # ----------------------- Objective function -------------------------
@@ -350,23 +359,25 @@ class FredILP:
                     OBJ_SUM += OBJ[i, j, k] * len(self.ridxs[i])
         # We add the chosen cost for each isoform assigned to the garbage isoform if any
         for i in range(N):
-            OBJ_SUM += len(self.ridxs[i]) * self.R2I[i, 0] * (max_corrections + 1)
+            OBJ_SUM += (
+                len(self.ridxs[i])
+                * self.R2I[i, 0]
+                * (self.params.max_correction_count + 1)
+            )
         self.model.setObjective(obj=OBJ_SUM)
         self.model.sense = pulp.LpMinimize
 
     def solve(
         self,
-        solver: str = "COIN_CMD",
-        threads: int = 1,
-        timeLimit: int = 5 * 60,
     ) -> tuple[int, tuple[list[aln_t], ...], tuple[list[int], ...]]:
-        solver = pulp.getSolver(
-            solver,
-            timeLimit=timeLimit,
-            threads=threads,
-            msg=0,
+        self.model.solve(
+            solver=pulp.getSolver(
+                self.params.ilp_solver,
+                timeLimit=self.params.timeLimit,
+                threads=self.params.ilp_threads,
+                msg=0,
+            )
         )
-        self.model.solve(solver=solver)
         status = self.model.status
         bins: tuple[list[int], ...] = tuple(list() for _ in range(self.K))
         bin_structures: tuple[list[aln_t], ...] = tuple(list() for _ in range(self.K))
