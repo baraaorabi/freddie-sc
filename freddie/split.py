@@ -490,11 +490,11 @@ class FredSplit:
             for x in sam.header.to_dict()["SQ"]
             if x["LN"] > self.params.contig_min_len
         ]
+        contig_idx = 0
+        desc_fstr = "Detecting isoforms (done generating from {:.0%} contigs)"
         for contig in contigs:
             if pbar is not None:
-                pbar.set_description(
-                    f"Detecting isoforms (genererating from contig {contig} out of {len(contigs)})"
-                )
+                pbar.set_description(desc_fstr.format(contig_idx / len(contigs)))
                 pbar.refresh()
             for reads in self.overlapping_reads(sam, contig):
                 for tint in self.get_tints(reads, contig):
@@ -502,8 +502,7 @@ class FredSplit:
                     if pbar is not None:
                         pbar.total += 1
                         pbar.refresh()
+            contig_idx += 1
         if pbar is not None:
-            pbar.set_description(
-                f"Detecting isoforms (done generating from all {len(contigs)} contigs)"
-            )
+            pbar.set_description(desc_fstr.format(contig_idx / len(contigs)))
             pbar.refresh()

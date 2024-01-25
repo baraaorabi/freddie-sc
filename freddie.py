@@ -144,7 +144,7 @@ def parse_args():
     assert 0 < args.max_correction_count
     print(f"[freddie] Args:", file=sys.stderr)
     for arg in vars(args):
-        print(f"[freddiej]   {arg}: {getattr(args, arg)}", file=sys.stderr)
+        print(f"[freddie]   {arg}: {getattr(args, arg)}", file=sys.stderr)
 
     return args
 
