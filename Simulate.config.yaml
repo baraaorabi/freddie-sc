@@ -32,6 +32,9 @@ TS_experiments:
         pipeline:
             - Mrg:
                   sources: ["C1", "C2", "C3", "C4", "C5"]
+            - Trc:
+                  params: ""
+                  model: MCF7
             - plA:
                   params: "--normal=15,7.5"
             - Tag:
@@ -46,9 +49,6 @@ TS_experiments:
                   params: "-p 0.5"
             - Tag:
                   params: "--format5 AATGTACTTCGTTCAGTTACGTATTGCT --format3 GCAATACGTAACTGAACGAAGT"
-            - Trc:
-                  params: ""
-                  model: MCF7
             - Shf:
                   params: ""
             - Seq:

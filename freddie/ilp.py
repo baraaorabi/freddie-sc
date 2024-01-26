@@ -292,7 +292,7 @@ class FredILP:
                             cat=pulp.LpBinary,
                         )
                         self.model += C2IRT[j, k, i, l] == (
-                            self.R2I[i, k] * self.rows[i][j] != aln_t.unaln
+                            self.R2I[i, k] * (self.rows[i][j] != aln_t.unaln)
                         )
         for k in range(1, K):
             for j in range(M):
