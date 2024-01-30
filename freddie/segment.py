@@ -1,10 +1,13 @@
 from collections import Counter, defaultdict
 import enum
 from itertools import groupby
+from shutil import which
 from typing import Union, Iterable
 
 from freddie.split import Read, PairedInterval, Interval
 
+from matplotlib import colormaps  # type: ignore
+from matplotlib import colors as mpl_colors
 from matplotlib import pyplot as plt
 import numpy as np
 import numpy.typing as npt
@@ -536,6 +539,50 @@ class CanonIntervals:
         if recompute_matrix:
             self.compute_matrix()
 
+    @staticmethod
+    def color_aln_matrix(
+        read_classes: list[str],
+        aln_matrix: npt.NDArray[np.uint8],
+    ) -> tuple[
+        npt.NDArray[np.uint8],
+        mpl_colors.ListedColormap,
+        mpl_colors.BoundaryNorm,
+        tuple[int, ...],
+    ]:
+        classes_list = sorted(set(cs for cs in read_classes))
+        aln_to_color_val = dict()
+        color_to_val = defaultdict(lambda: len(color_to_val))
+        for i, cs in enumerate(classes_list):
+            color = (1.0, 1.0, 1.0, 1.0)  # white
+            aln_to_color_val[(cs, aln_t.unaln)] = color_to_val[(1.0, 1.0, 1.0, 1.0)]
+
+            color = (0.0, 0.0, 0.0, 1.0)  # black
+            aln_to_color_val[(cs, aln_t.polyA)] = color_to_val[color]
+
+            color = colormaps["tab20"]((i * 2) % len(colormaps["tab20"].colors))
+            aln_to_color_val[(cs, aln_t.exon)] = color_to_val[color]
+
+            color = colormaps["tab20"]((i * 2 + 1) % len(colormaps["tab20"].colors))
+            aln_to_color_val[(cs, aln_t.intron)] = color_to_val[color]
+
+        aln_colors, aln_color_bounds = list(
+            zip(
+                *sorted(
+                    color_to_val.items(),
+                    key=lambda x: x[1],
+                )
+            )
+        )
+        aln_color_bounds = aln_color_bounds + (len(aln_color_bounds),)
+        cmap = mpl_colors.ListedColormap(aln_colors)
+        norm = mpl_colors.BoundaryNorm(aln_color_bounds, cmap.N)
+
+        matrix = aln_matrix.copy()
+        for i in range(matrix.shape[0]):
+            for j in range(matrix.shape[1]):
+                matrix[i, j] = aln_to_color_val[(read_classes[i], matrix[i, j])]
+        return matrix, cmap, norm, aln_color_bounds
+
     def plot(
         self,
         unique: bool = True,
@@ -543,6 +590,7 @@ class CanonIntervals:
         figsize: tuple[int, int] = (15, 10),
         out_prefix: Union[str, None] = None,
         read_bins: Union[tuple[list[int], ...], None] = None,
+        read_classes: Union[list[str], None] = None,
     ):
         """
         Plot the intervals and the matrix representation of the intervals using matplotlib's imshow
@@ -556,6 +604,8 @@ class CanonIntervals:
         out_prefix : str, optional
             if not None save the plot to out_prefix.png and out_prefix.pdf
         """
+        if read_classes == None:
+            read_classes = [""] * len(self.reads)
         if read_bins == None:
             read_bins = ([rid for rid in range(len(self.reads))],)
         N = sum(len(read_bin) for read_bin in read_bins)
@@ -563,7 +613,8 @@ class CanonIntervals:
             nrows=len(read_bins) + 1,
             ncols=2,
             figsize=figsize,
-            sharex=True,
+            sharex="col",
+            sharey="row",
             gridspec_kw={
                 "height_ratios": [1]
                 + [5 * len(read_bin) / N for read_bin in read_bins],
@@ -590,18 +641,40 @@ class CanonIntervals:
         heights_ax.set_yticklabels(yticks, size=8)
         heights_ax.grid()
 
-        full_matrix = self.get_matrix()
-        for imshow_ax, read_bin in zip(axes[1:, 0], read_bins):
+        full_aln_matrix, aln_cmap, aln_norm, aln_bounds = self.color_aln_matrix(
+            read_classes, self.get_matrix()
+        )
+        celltypes: list[str] = sorted(
+            {ct for read in self.reads for ct in read.cell_types}
+        )
+        full_celltype_matrix = np.zeros(
+            (len(self.reads), len(celltypes)), dtype=np.uint8
+        )
+        for i, read in enumerate(self.reads):
+            for ct in read.cell_types:
+                full_celltype_matrix[i, celltypes.index(ct)] = celltypes.index(ct) + 1
+        full_matrix = np.concatenate((full_aln_matrix, full_celltype_matrix), axis=1)
+        for imshow_axes, read_bin in zip(axes[1:, :], read_bins):
+            aln_ax = imshow_axes[0]
+            ct_ax = imshow_axes[1]
             if len(read_bin) == 0:
                 continue
             matrix = full_matrix[read_bin, :]
             if unique:
                 matrix = np.unique(matrix, axis=0)
-            unique_read_count = matrix.shape[0]
-            imshow_ax.imshow(matrix, cmap="binary", aspect="auto", interpolation="none")
+            aln_matrix = matrix[:, : full_aln_matrix.shape[1]]
+            celltype_matrix = matrix[:, full_aln_matrix.shape[1] :]
 
-            imshow_ax.set_ylabel(f"n={len(read_bin)}, u={unique_read_count}", size=10)
-            imshow_ax.set_xlabel("Interval index", size=10)
+            unique_read_count = aln_matrix.shape[0]
+            aln_ax.imshow(
+                aln_matrix,
+                cmap=aln_cmap,
+                norm=aln_norm,
+                aspect="auto",
+                interpolation="none",
+            )
+            aln_ax.set_ylabel(f"n={len(read_bin)}, u={unique_read_count}", size=10)
+            aln_ax.set_xlabel("Interval index", size=10)
             starts = (
                 [0]
                 + [interval.start for interval in self.intervals]
@@ -610,29 +683,46 @@ class CanonIntervals:
             xticks = np.arange(1, len(starts), max(1, len(starts) // 30))
             if xticks[-1] != len(starts) - 1:
                 xticks = np.append(xticks, len(starts) - 1)
-            imshow_ax.set_xticks(xticks - 0.5)
-            imshow_ax.set_xticklabels(
+            aln_ax.set_xticks(xticks - 0.5)
+            aln_ax.set_xticklabels(
                 [f"{i}) {starts[i]:,}" for i in xticks],
                 size=8,
                 rotation=90,
             )
             yticks = np.arange(0, unique_read_count, max(1, unique_read_count // 30))
-            imshow_ax.set_yticks(yticks - 0.5)
-            imshow_ax.set_yticklabels(yticks.astype(int), size=8)
-            if out_prefix is not None:
-                plt.savefig(f"{out_prefix}.png", dpi=500, bbox_inches="tight")
-                plt.savefig(f"{out_prefix}.pdf", bbox_inches="tight")
-            imshow_ax.grid(which="major", axis="both")
-        for ax in axes[:, 1]:
-            ax.tick_params(
+            aln_ax.set_yticks(yticks - 0.5)
+            aln_ax.set_yticklabels(yticks.astype(int), size=8)
+            aln_ax.grid(which="major", axis="both")
+
+            ct_ax.imshow(
+                celltype_matrix, cmap="binary", aspect="auto", interpolation="none"
+            )
+            xticks = np.arange(0, len(celltypes))
+            ct_ax.set_xticks(xticks + 0.5)
+            ct_ax.tick_params(
                 axis="both",
-                which="both",
+                which="major",
                 left=False,
                 bottom=False,
                 labelleft=False,
                 labelbottom=False,
             )
-            for _, spine in ax.spines.items():
-                spine.set_visible(False)
+            ct_ax.set_xticks(xticks, labels=celltypes, size=8, rotation=90, minor=True)
+            ct_ax.grid(which="major", axis="both")
+
+        corner_ax = axes[0, 1]
+        corner_ax.tick_params(
+            axis="both",
+            which="both",
+            left=False,
+            bottom=False,
+            labelleft=False,
+            labelbottom=False,
+        )
+        for _, spine in corner_ax.spines.items():
+            spine.set_visible(False)
         plt.tight_layout()
+        if out_prefix is not None:
+            plt.savefig(f"{out_prefix}.png", dpi=500, bbox_inches="tight")
+            plt.savefig(f"{out_prefix}.pdf", bbox_inches="tight")
         plt.show()
