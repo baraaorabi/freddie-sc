@@ -22,6 +22,7 @@ class IlpParams:
     max_correction_count: int = 3
     ilp_solver: str = "COIN_CMD"
     ilp_threads: int = 1
+    ignore_celltype: bool = False
 
 
 class FredILP:
@@ -33,7 +34,10 @@ class FredILP:
         ] = defaultdict(list)
         self.interval_lengths = (10,) + tuple(map(len, cints.intervals)) + (10,)
         for idx, row in enumerate(cints.get_matrix()):
-            cell_types = cints.reads[idx].cell_types
+            if self.params.ignore_celltype:
+                cell_types = ("",)
+            else:
+                cell_types = cints.reads[idx].cell_types
             first = len(row) - 1
             last = 0
             for j, aln_type in enumerate(row):

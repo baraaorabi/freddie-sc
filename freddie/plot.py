@@ -13,11 +13,7 @@ from matplotlib import pyplot as plt
 def color_aln_matrix(
     read_classes: list[str],
     aln_matrix: npt.NDArray[np.uint8],
-) -> tuple[
-    npt.NDArray[np.uint8],
-    mpl_colors.ListedColormap,
-    mpl_colors.BoundaryNorm,
-]:
+) -> tuple[npt.NDArray[np.uint8], mpl_colors.ListedColormap, mpl_colors.BoundaryNorm,]:
     classes_list = sorted(set(cs for cs in read_classes))
     aln_to_color_val = dict()
     color_to_val = defaultdict(lambda: len(color_to_val))
@@ -28,12 +24,11 @@ def color_aln_matrix(
         color = (0.0, 0.0, 0.0, 1.0)  # black
         aln_to_color_val[(cs, aln_t.polyA)] = color_to_val[color]
 
-        color = colormaps["tab20"]((i * 2) % len(colormaps["tab20"].colors))
+        color = colormaps["tab10"](i % len(colormaps["tab10"].colors))
         aln_to_color_val[(cs, aln_t.exon)] = color_to_val[color]
 
-        color = colormaps["tab20"]((i * 2 + 1) % len(colormaps["tab20"].colors))
+        color = color[:3] + (0.5,)  # half transparent
         aln_to_color_val[(cs, aln_t.intron)] = color_to_val[color]
-
     aln_colors, aln_color_bounds = list(
         zip(
             *sorted(
@@ -43,6 +38,7 @@ def color_aln_matrix(
         )
     )
     aln_color_bounds = aln_color_bounds + (len(aln_color_bounds),)
+    aln_color_bounds = [x - 0.1 for x in aln_color_bounds]
     cmap = mpl_colors.ListedColormap(aln_colors)
     norm = mpl_colors.BoundaryNorm(
         aln_color_bounds,
@@ -56,7 +52,7 @@ def color_aln_matrix(
     return matrix, cmap, norm
 
 
-def plot(
+def plot_cints(
     cints: CanonIntervals,
     unique: bool = True,
     min_height: int = 5,
@@ -64,6 +60,7 @@ def plot(
     out_prefix: Union[str, None] = None,
     read_bins: Union[tuple[list[int], ...], None] = None,
     read_classes: Union[list[str], None] = None,
+    read_types: Union[list[tuple[str, ...]], None] = None,
 ):
     """
     Plot the intervals and the matrix representation of the intervals using matplotlib's imshow
@@ -79,6 +76,8 @@ def plot(
     """
     if read_classes == None:
         read_classes = [""] * len(cints.reads)
+    if read_types == None:
+        read_types = [(tuple())] * len(cints.reads)
     if read_bins == None:
         read_bins = ([rid for rid in range(len(cints.reads))],)
     N = sum(len(read_bin) for read_bin in read_bins)
@@ -94,6 +93,12 @@ def plot(
         },
         squeeze=False,
     )
+    fig.suptitle(
+        f"Classes {len(set(read_classes))}, "
+        + f"Types {len(set(read_types))}, "
+        + f"Reads {len(cints.reads)}"
+    )
+
     plt.subplots_adjust(wspace=0, hspace=0)
     heights_ax = axes[0, 0]
     fig.subplots_adjust(hspace=0)
@@ -116,13 +121,7 @@ def plot(
     full_aln_matrix, aln_cmap, aln_norm = color_aln_matrix(
         read_classes, cints.get_matrix()
     )
-    celltypes: list[str] = sorted(
-        {ct for read in cints.reads for ct in read.cell_types}
-    )
-    full_celltype_matrix = np.zeros((len(cints.reads), len(celltypes)), dtype=np.uint8)
-    for i, read in enumerate(cints.reads):
-        for ct in read.cell_types:
-            full_celltype_matrix[i, celltypes.index(ct)] = celltypes.index(ct) + 1
+    celltypes, full_celltype_matrix = get_celltype_matrix(cints, read_types)
     full_matrix = np.concatenate((full_aln_matrix, full_celltype_matrix), axis=1)
     for imshow_axes, read_bin in zip(axes[1:, :], read_bins):
         aln_ax = imshow_axes[0]
@@ -196,3 +195,17 @@ def plot(
         plt.savefig(f"{out_prefix}.png", dpi=500, bbox_inches="tight")
         plt.savefig(f"{out_prefix}.pdf", bbox_inches="tight")
     plt.show()
+
+
+def get_celltype_matrix(
+    cints: CanonIntervals, read_types: list[tuple[str, ...]]
+) -> tuple[list[str], npt.NDArray[np.uint8]]:
+    celltypes: list[str] = sorted({ct for cts in read_types for ct in cts})
+    full_celltype_matrix: npt.NDArray[np.uint8] = np.zeros(
+        shape=(len(cints.reads), len(celltypes)),
+        dtype=np.uint8,
+    )
+    for i, cts in enumerate(read_types):
+        for ct in cts:
+            full_celltype_matrix[i, celltypes.index(ct)] = celltypes.index(ct) + 1
+    return celltypes, full_celltype_matrix
