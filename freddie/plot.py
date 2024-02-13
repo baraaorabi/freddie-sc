@@ -13,7 +13,11 @@ from matplotlib import pyplot as plt
 def color_aln_matrix(
     read_classes: list[str],
     aln_matrix: npt.NDArray[np.uint8],
-) -> tuple[npt.NDArray[np.uint8], mpl_colors.ListedColormap, mpl_colors.BoundaryNorm,]:
+) -> tuple[
+    npt.NDArray[np.uint8],
+    mpl_colors.ListedColormap,
+    mpl_colors.BoundaryNorm,
+]:
     classes_list = sorted(set(cs for cs in read_classes))
     aln_to_color_val = dict()
     color_to_val = defaultdict(lambda: len(color_to_val))

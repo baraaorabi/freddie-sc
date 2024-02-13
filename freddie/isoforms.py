@@ -1,5 +1,4 @@
 import functools
-from typing import Generator
 from dataclasses import dataclass
 
 from freddie.ilp import FredILP, IlpParams
@@ -29,12 +28,14 @@ class Isoform:
 
     Attributes:
         tid: Tint ID
-        contig: Contig
         reads: List of reads comprising the isoform
+        iid: Isoform index
+        contig: Contig
+        strand: Strand of the isoform if it can be determined from the read polyA tails (i.e. + or -). Otherwise, "."
         exons: List of genomic intervals (i.e. exons) comprising the isoform with support values.
                 The support value is computed by adding the number of bases covered by
                 each read in the interval and dividing by the interval length.
-        strand: Strand of the isoform if it can be determined from the read polyA tails (i.e. + or -). Otherwise, "."
+        cell_types: Tuple of cell types
 
     Methods:
         __eq__: Equality operator
@@ -54,6 +55,13 @@ class Isoform:
         self.iid = isoform_index
         self.contig = contig
         self.exons: list[IntervalSupport] = list()
+        cell_types_set = set()
+        for read in self.reads:
+            if len(cell_types_set) == 0:
+                cell_types_set.add("NA")
+            for ct in read.cell_types:
+                cell_types_set.add(ct)
+        self.cell_types = tuple(sorted(cell_types_set))
 
         canon_ints = CanonIntervals(self.reads)
         for i in range(10):
@@ -125,6 +133,7 @@ class Isoform:
                             f'gene_id "{gene_id}";',
                             f'transcript_id "{isoform_id}";',
                             f'read_support "{len(self.reads)}";',
+                            f'cell_types "{",".join(self.cell_types)}";',
                         ]
                     ),
                 ]
@@ -158,7 +167,7 @@ class Isoform:
 
 def get_isoforms(
     tint: Tint,
-    params: IsoformsParams = IsoformsParams()
+    params: IsoformsParams = IsoformsParams(),
 ) -> list[Isoform]:
     """
     Returns isoforms for the given Tint.

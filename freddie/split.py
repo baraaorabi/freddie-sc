@@ -316,7 +316,10 @@ class FredSplit:
                     canonized_cigar.append((op, l))
         return canonized_cigar
 
-    def get_intervals(self, aln) -> list[PairedInterval]:
+    @staticmethod
+    def get_intervals(
+        aln: pysam.AlignedSegment, cigar_max_del: int
+    ) -> list[PairedInterval]:
         """
         Returns a list of intervals of the alignment.
         Each interval is a tuple of (target_start, target_end, query_start, query_end)
@@ -329,8 +332,13 @@ class FredSplit:
         aln : pysam.AlignedSegment
             pysam AlignedSegment object
         """
-        cigartuples: list[tuple[int, int]] = list(aln.cigartuples)
-        cigar = FredSplit.canonize_cigar(cigartuples)
+        assert (
+            aln.cigartuples is not None
+        ), f"CIGAR tuples are None in {aln.query_name} SAM record."
+        assert (
+            aln.query_sequence is not None
+        ), f"Query sequence is None in {aln.query_name} SAM record."
+        cigar = FredSplit.canonize_cigar(aln.cigartuples)
         qstart = 0
         qlen = 0
         for op, l in cigar:
@@ -347,8 +355,7 @@ class FredSplit:
         tend: int = tstart  # current interval's end on target
         for is_splice, g in groupby(
             cigar,
-            key=lambda x: x[0] == CIGAR_OPS_SIMPLE.target
-            and x[1] > self.params.cigar_max_del,
+            key=lambda x: x[0] == CIGAR_OPS_SIMPLE.target and x[1] > cigar_max_del,
         ):
             cur_cigar = list(g)
             for op, l in cur_cigar:
@@ -437,7 +444,7 @@ class FredSplit:
                 continue
             qname: str = str(aln.query_name)
             seq = str(aln.query_sequence)
-            intervals = self.get_intervals(aln)
+            intervals = self.get_intervals(aln, self.params.cigar_max_del)
             lpA_a, lpA_b, lpA_c = self.find_longest_polyA(
                 seq[: intervals[0].query.start]
             )
