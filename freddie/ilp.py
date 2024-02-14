@@ -24,6 +24,8 @@ class IlpParams:
     ilp_threads: int = 1
     ignore_celltype: bool = False
 
+class InfeasibleILP(Exception):
+    pass
 
 class FredILP:
     def __init__(self, cints: CanonIntervals, params: IlpParams = IlpParams()):
@@ -422,9 +424,10 @@ class FredILP:
         status = self.model.status
         bins: tuple[list[int], ...] = tuple(list() for _ in range(self.K))
         bin_structures: tuple[list[aln_t], ...] = tuple(list() for _ in range(self.K))
-        assert status in (pulp.LpStatusNotSolved, pulp.LpStatusOptimal), pulp.LpStatus[
-            status
-        ]
+        if not status in (pulp.LpStatusNotSolved, pulp.LpStatusOptimal):
+            raise InfeasibleILP(
+                f"ILP solver failed to solve the model, status: {pulp.LpStatus[status]}"
+            )
         if status == pulp.LpStatusOptimal:
             for k in range(self.K):
                 for i, ridxs in enumerate(self.ridxs):

@@ -1,7 +1,8 @@
 import functools
 from dataclasses import dataclass
+import sys
 
-from freddie.ilp import FredILP, IlpParams
+from freddie.ilp import FredILP, IlpParams, InfeasibleILP
 from freddie.segment import CanonIntervals, PairedInterval, aln_t
 from freddie.split import Interval, Read, Tint
 
@@ -226,7 +227,15 @@ def run_ilp(reads: list[Read], params: IsoformsParams) -> tuple[list[Read], list
             canon_ints.pop(i)
         ilp: FredILP = FredILP(canon_ints, params.ilp_params)
         ilp.build_model(K=2)
-        status, vects, bins = ilp.solve()
+        try:
+            status, vects, bins = ilp.solve()
+        except InfeasibleILP:
+            print(f"ILP infeasible for {len(sample_reads)} reads:", file=sys.stderr)
+            for read in sample_reads[:10]:
+                print(read.name, file=sys.stderr)
+            if len(sample_reads) > 10:
+                print("...", file=sys.stderr)
+            raise InfeasibleILP
         assert len(vects) == len(bins) == 2, f"Expected 2 bins, got {len(bins)}"
         recycling_bin, isoform_bin = bins
         isoform_vect = vects[1]
@@ -255,6 +264,11 @@ def run_ilp(reads: list[Read], params: IsoformsParams) -> tuple[list[Read], list
                     size=len(sample_reads) // 2,
                     replace=False,
                 )
+            )
+            print(
+                f"ILP of {len(sample_reads)} reads not solved, "
+                + f"retrying with {len(sample_ridxs)} read subset of reads",
+                file=sys.stderr,
             )
             sample_reads = list()
             unsampled_reads = list()
@@ -332,5 +346,4 @@ def get_compatible_reads_bins(
             compatible_reads.append(read)
         else:
             incompatible_reads.append(read)
-    print(f"compatible reads: {len(compatible_reads)}")
     return incompatible_reads, compatible_reads

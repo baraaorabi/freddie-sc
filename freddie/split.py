@@ -498,7 +498,7 @@ class FredSplit:
             if x["LN"] > self.params.contig_min_len
         ]
         contig_idx = 0
-        desc_fstr = "Detecting isoforms (done generating from {:.0%} contigs)"
+        desc_fstr = "[freddie] Detecting isoforms ({:4.0%} of contigs)"
         for contig in contigs:
             if pbar is not None:
                 pbar.set_description(desc_fstr.format(contig_idx / len(contigs)))
