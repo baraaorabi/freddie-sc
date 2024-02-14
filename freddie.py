@@ -17,6 +17,8 @@ def parse_args():
     split_params = FredSplitParams()
     isoform_params = IsoformsParams()
     ilp_params = IlpParams()
+    if "GUROBI" in pulp.listSolvers(onlyAvailable=True):
+        ilp_params.ilp_solver = "GUROBI"
 
     parser = argparse.ArgumentParser(
         description="scFreddie: Detecting isoforms from single-cell long-read RNA-seq data",
