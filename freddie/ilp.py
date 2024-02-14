@@ -24,8 +24,10 @@ class IlpParams:
     ilp_threads: int = 1
     ignore_celltype: bool = False
 
+
 class InfeasibleILP(Exception):
     pass
+
 
 class FredILP:
     def __init__(self, cints: CanonIntervals, params: IlpParams = IlpParams()):
@@ -189,11 +191,6 @@ class FredILP:
         # Setting up E2IR and E2I vars
         for j in range(M):
             # No exon is assignd to the garbage isoform
-            self.E2I[j, 0] = pulp.LpVariable(
-                name=f"E2I_{j},0",
-                cat=pulp.LpBinary,
-            )
-            self.model += self.E2I[(j, 0)] == 0
             # We start assigning exons from the first isoform
             for k in range(1, K):
                 self.E2I[j, k] = pulp.LpVariable(
@@ -334,9 +331,17 @@ class FredILP:
         # ------------------------- Constraints -------------------------
         ## Contraint: On isoform contiguity
         # Each isoform coverage must be contiguous. Coverage includes all exons and introns intervals.
-        # I.e. for each isoform k, the sum of CHANGE2I[j, k] over all j must be exactly 2
+        # I.e. for each isoform k, the sum of CHANGE2I[j, k] over all j must be exactly 2 or 0 (if no read is assigned to the isoform)
         for k in range(1, K):
-            self.model += pulp.lpSum(CHANGE2I[j, k] for j in range(-1, M)) == 2
+            CHANGE2I_sum = pulp.LpVariable(
+                name=f"CHANGE2I_sum_{k}",
+                cat=pulp.LpInteger,
+                lowBound=0,
+                upBound=2,
+            )
+            self.model += CHANGE2I_sum == pulp.lpSum(
+                CHANGE2I[j, k] for j in range(-1, M)
+            )
         # All adjacent exons in an isoform must be contiguous in one of the reads assigned to the isoform
         # I.e. for each isoform k, if E2I[j] = 1 and E2I[j + 1] = 1, then EXON_CONTIG2I[j, k] = 1
         for k in range(1, K):
@@ -429,12 +434,17 @@ class FredILP:
                 f"ILP solver failed to solve the model, status: {pulp.LpStatus[status]}"
             )
         if status == pulp.LpStatusOptimal:
-            for k in range(self.K):
+            for k in range(0, self.K):
                 for i, ridxs in enumerate(self.ridxs):
                     val = self.R2I[i, k].varValue
                     assert val != None, f"Unsolved variable, {self.R2I[i, k]}"
                     if val > 0.5:
                         bins[k].extend(ridxs)
+                if k == 0:
+                    bin_structures[k].extend(
+                        [aln_t.unaln for _ in range(len(self.interval_lengths))]
+                    )
+                    continue
                 for j in range(len(self.interval_lengths)):
                     val = self.E2I[j, k].varValue
                     assert val != None, f"Unsolved variable, {self.E2I[j, k]}"

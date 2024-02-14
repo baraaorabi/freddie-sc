@@ -6,27 +6,27 @@ TS_experiments:
     C1:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 50000 --molecule-prefix C1: -s 41"
+                  params: "--molecule-count 100000 --molecule-prefix C1: -s 41"
                   model: A549
     C2:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 50000 --molecule-prefix C2: -s 42"
+                  params: "--molecule-count 100000 --molecule-prefix C2: -s 42"
                   model: Hct116
     C3:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 50000 --molecule-prefix C3: -s 43"
+                  params: "--molecule-count 100000 --molecule-prefix C3: -s 43"
                   model: HepG2
     C4:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 50000 --molecule-prefix C4: -s 44"
+                  params: "--molecule-count 100000 --molecule-prefix C4: -s 44"
                   model: K562
     C5:
         pipeline:
             - Tsb:
-                  params: "--molecule-count 50000 --molecule-prefix C5: -s 45"
+                  params: "--molecule-count 100000 --molecule-prefix C5: -s 45"
                   model: MCF7
     S1:
         pipeline:
@@ -44,7 +44,7 @@ TS_experiments:
             - Tag:
                   params: "--format3 AGATCGGAAGAGCGTCGTGTAG"
             - PCR:
-                  params: "--cycles 5 --molecule-count 100000 -x Taq-setting1"
+                  params: "--cycles 5 --molecule-count 5000000 -x Taq-setting1"
             - Flp:
                   params: "-p 0.5"
             - Tag:
@@ -73,20 +73,40 @@ samples:
     A549:
         fastq:
             - data/samples/SGNex_A549_directcDNA_replicate1_run3.fastq.gz
-        ref: Homo_sapiens_chr21
+        ref: Homo_sapiens
     Hct116:
         fastq:
             - data/samples/SGNex_Hct116_directcDNA_replicate4_run1.fastq.gz
-        ref: Homo_sapiens_chr21
+        ref: Homo_sapiens
     HepG2:
         fastq:
             - data/samples/SGNex_HepG2_directcDNA_replicate5_run3.fastq.gz
-        ref: Homo_sapiens_chr21
+        ref: Homo_sapiens
     K562:
         fastq:
             - data/samples/SGNex_K562_directcDNA_replicate1_run2.fastq.gz
-        ref: Homo_sapiens_chr21
+        ref: Homo_sapiens
     MCF7:
+        fastq:
+            - data/samples/SGNex_MCF7_directcDNA_replicate4_run2.fastq.gz
+        ref: Homo_sapiens
+    A549_chr21:
+        fastq:
+            - data/samples/SGNex_A549_directcDNA_replicate1_run3.fastq.gz
+        ref: Homo_sapiens_chr21
+    Hct116_chr21:
+        fastq:
+            - data/samples/SGNex_Hct116_directcDNA_replicate4_run1.fastq.gz
+        ref: Homo_sapiens_chr21
+    HepG2_chr21:
+        fastq:
+            - data/samples/SGNex_HepG2_directcDNA_replicate5_run3.fastq.gz
+        ref: Homo_sapiens_chr21
+    K562_chr21:
+        fastq:
+            - data/samples/SGNex_K562_directcDNA_replicate1_run2.fastq.gz
+        ref: Homo_sapiens_chr21
+    MCF7_chr21:
         fastq:
             - data/samples/SGNex_MCF7_directcDNA_replicate4_run2.fastq.gz
         ref: Homo_sapiens_chr21
@@ -111,5 +131,25 @@ models:
             params: "--cb-count 500  --cb-dropout 0.0 --random-seed 44"
         MCF7:
             sample: MCF7
+            cb-txt: 10x
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 45"
+        A549_chr21:
+            sample: A549_chr21
+            cb-txt: 10x
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 41"
+        Hct116_chr21:
+            sample: Hct116_chr21
+            cb-txt: 10x
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 42"
+        HepG2_chr21:
+            sample: HepG2_chr21
+            cb-txt: 10x
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 43"
+        K562_chr21:
+            sample: K562_chr21
+            cb-txt: 10x
+            params: "--cb-count 500  --cb-dropout 0.0 --random-seed 44"
+        MCF7_chr21:
+            sample: MCF7_chr21
             cb-txt: 10x
             params: "--cb-count 500  --cb-dropout 0.0 --random-seed 45"

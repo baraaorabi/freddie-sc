@@ -10,6 +10,11 @@ samples:
         bc_wl: 10x
         reads: output/simulate/TS/S1.fastq
         truth: output/simulate/TS/S1.tsv
+    E1:
+        ref: Homo_sapiens
+        bc_wl: 10x
+        reads: output/simulate/TS/E1.fastq
+        truth: output/simulate/TS/E1.tsv
     # N1:
     #     ref: Homo_sapiens
     #     reads: data/samples/N1.fastq

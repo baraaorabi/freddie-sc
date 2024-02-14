@@ -451,18 +451,21 @@ class FredSplit:
             rpA_a, rpA_b, rpA_c = self.find_longest_polyA(
                 seq[intervals[-1].query.end :]
             )
-            polyAs = (
-                Read.PolyA(
-                    overhang=lpA_a,
-                    length=lpA_b,
-                    slack=lpA_c,
-                ),
-                Read.PolyA(
-                    slack=rpA_a,
-                    length=rpA_b,
-                    overhang=rpA_c,
-                ),
-            )
+            if lpA_b > 0 and rpA_b > 0:
+                polyAs = (Read.PolyA(), Read.PolyA())
+            else:
+                polyAs = (
+                    Read.PolyA(
+                        overhang=lpA_a,
+                        length=lpA_b,
+                        slack=lpA_c,
+                    ),
+                    Read.PolyA(
+                        slack=rpA_a,
+                        length=rpA_b,
+                        overhang=rpA_c,
+                    ),
+                )
             read = Read(
                 idx=self.read_count,
                 name=qname,
