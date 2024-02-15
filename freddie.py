@@ -185,12 +185,24 @@ def main():
         outfile = open(args.output, "w+")
     if args.readnames_output is not None:
         args.readnames_output = open(args.readnames_output, "w+")
-    with Pool(args.threads) as pool, tqdm(desc="Detecting isoforms", total=1) as pbar:
-        tints = split.generate_all_tints(args.bam, pbar)
+    with Pool(args.threads) as pool:
+        pbar_tint = tqdm(
+            desc="[freddie] Tint progress",
+            total=1,
+            unit="tint",
+        )
+        pbar_reads = tqdm(
+            desc="[freddie] Read progress",
+            total=1,
+            unit="read",
+            unit_scale=True,
+        )
+        tints = split.generate_all_tints(args.bam, pbar_tint, pbar_reads)
         if args.generate_all_tints_first:
             tints = list(tints)
-        for isoforms in pool.imap_unordered(get_isoforms_f, tints):
-            pbar.update(1)
+        for tint, isoforms in pool.imap_unordered(get_isoforms_f, tints):
+            pbar_tint.update(1)
+            pbar_reads.update(len(tint.reads))
             for isoform in isoforms:
                 if args.sort_output:
                     all_isoforms.append(isoform)

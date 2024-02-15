@@ -492,27 +492,45 @@ class FredSplit:
     def generate_all_tints(
         self,
         sam_path: str,
-        pbar: tqdm | None = None,
+        pbar_tint: tqdm | None = None,
+        pbar_reads: tqdm | None = None,
     ) -> Generator[Tint, None, None]:
         sam = pysam.AlignmentFile(sam_path, "rb")
-        contigs: list[str] = [
-            x["SN"]
-            for x in sam.header.to_dict()["SQ"]
-            if x["LN"] > self.params.contig_min_len
-        ]
-        contig_idx = 0
-        desc_fstr = "[freddie] Detecting isoforms ({:4.0%} of contigs)"
-        for contig in contigs:
-            if pbar is not None:
-                pbar.set_description(desc_fstr.format(contig_idx / len(contigs)))
-                pbar.refresh()
+        contigs_and_lens: list[tuple[str, int]] = list()
+        for x in sam.header.to_dict()["SQ"]:
+            if x["LN"] < self.params.contig_min_len:
+                continue
+            contigs_and_lens.append((x["SN"], x["LN"]))
+        pbar_conting = tqdm(
+            desc=f"[freddie] Contig progress",
+            total=1,
+            unit="bp",
+            unit_scale=True,
+            leave=True,
+        )
+        pbar_genome = tqdm(
+            desc=f"[freddie] Genome progress",
+            total=len(contigs_and_lens),
+            unit="contig",
+            leave=True,
+        )
+        for contig, length in contigs_and_lens:
+            pbar_conting.reset()
+            pbar_conting.total = length
+            pbar_conting.set_description(f"[freddie] Contig {contig} progress")
+            last_pos = 0
             for reads in self.overlapping_reads(sam, contig):
+                cur_pos = reads[-1].intervals[-1].target.end
+                pbar_conting.update(cur_pos - last_pos)
+                last_pos = cur_pos
                 for tint in self.get_tints(reads, contig):
+                    if pbar_reads is not None:
+                        pbar_reads.total += len(tint.reads)
+                        pbar_reads.refresh()
+                    if pbar_tint is not None:
+                        pbar_tint.total += 1
+                        pbar_tint.refresh()
                     yield tint
-                    if pbar is not None:
-                        pbar.total += 1
-                        pbar.refresh()
-            contig_idx += 1
-        if pbar is not None:
-            pbar.set_description(desc_fstr.format(contig_idx / len(contigs)))
-            pbar.refresh()
+            pbar_genome.update(1)
+        pbar_genome.close()
+        pbar_conting.close()

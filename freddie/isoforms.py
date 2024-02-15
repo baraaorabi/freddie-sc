@@ -169,7 +169,7 @@ class Isoform:
 def get_isoforms(
     tint: Tint,
     params: IsoformsParams = IsoformsParams(),
-) -> list[Isoform]:
+) -> tuple[Tint, list[Isoform]]:
     """
     Returns isoforms for the given Tint.
 
@@ -198,7 +198,7 @@ def get_isoforms(
         reads = recycling_reads
         if len(reads) < params.min_read_support:
             break
-    return isoforms
+    return tint, isoforms
 
 
 def run_ilp(reads: list[Read], params: IsoformsParams) -> tuple[list[Read], list[Read]]:
