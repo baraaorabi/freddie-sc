@@ -155,6 +155,7 @@ def main():
     args = parse_args()
 
     split = FredSplit(
+        bam_path=args.sam,
         params=FredSplitParams(
             cigar_max_del=args.cigar_max_del,
             polyA_m_score=args.polyA_m_score,
@@ -197,9 +198,8 @@ def main():
             unit="read",
             unit_scale=True,
         )
-        tints = split.generate_all_tints(args.bam, pbar_tint, pbar_reads)
-        if args.generate_all_tints_first:
-            tints = list(tints)
+        tints = split.generate_all_tints(pbar_tint, pbar_reads)
+        tints = list(tints) if args.generate_all_tints_first else tints
         for tint, isoforms in pool.imap_unordered(get_isoforms_f, tints):
             pbar_tint.update(1)
             pbar_reads.update(len(tint.reads))
@@ -211,6 +211,8 @@ def main():
                 if args.readnames_output is not None:
                     for read in isoform.reads:
                         print(f"{isoform.iid}\t{read.name}", file=args.readnames_output)
+        pbar_tint.close()
+        pbar_reads.close()
     if args.sort_output:
         all_isoforms.sort()
         for isoform in all_isoforms:

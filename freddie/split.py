@@ -2,7 +2,7 @@ import enum
 from functools import total_ordering
 from itertools import groupby
 from collections import Counter, defaultdict, deque
-from typing import Generator
+from typing import Generator, Iterable
 from dataclasses import dataclass, field
 
 import pysam
@@ -70,33 +70,15 @@ op_simply: dict[int, CIGAR_OPS_SIMPLE] = {
 }
 
 
+@dataclass
 class Read:
-    """
-    Read alignment object
-
-    Attributes
-    ----------
-    idx : int
-        Read index (0-based, unique for each read in FredSplit object)
-    name : str
-        Read name
-    strand : str
-        Read strand
-    qlen : int
-        Read length
-    intervals : list[PairedInterval]
-        List of intervals of the read
-        Each interval is a PairedInterval namedtuple of (target_start, target_end, query_start, query_end)
-        Both target and query intervals are 0-based, start inclusive, and end exlusive
-        E.g. the interval 0-10 is 10bp long, and includes the base at index 0 but not the base at index 10.
-    polyAs : tuple[PolyA, PolyA]
-        Tuple of PolyA namedtuples of (overhang, length, slack) for the left and right polyA tails
-        overhang is the number of bases that are after polyA tail
-        length is the length of the polyA tail
-        slack is the number of bases that are before polyA tail (between the read alignment and the polyA tail)
-    cell_types : tuple[str, ...]
-        Tuple of cell types that the read belongs to
-    """
+    idx: int
+    name: str
+    strand: str
+    intervals: list[PairedInterval]
+    qlen: int
+    polyAs: tuple["Read.PolyA", "Read.PolyA"]
+    cell_types: tuple[str, ...]
 
     @dataclass
     class PolyA:
@@ -108,24 +90,6 @@ class Read:
             assert self.overhang >= 0
             assert self.length >= 0
             assert self.slack >= 0
-
-    def __init__(
-        self,
-        idx: int,
-        name: str,
-        strand: str,
-        intervals: list[PairedInterval],
-        qlen: int,
-        polyAs: tuple[PolyA, PolyA],
-        cell_types: tuple[str, ...],
-    ):
-        self.idx = idx
-        self.name = name
-        self.strand = strand
-        self.qlen = qlen
-        self.intervals = intervals
-        self.polyAs = polyAs
-        self.cell_types = cell_types
 
 
 @dataclass
@@ -145,15 +109,55 @@ class FredSplitParams:
 
 
 class FredSplit:
+    """
+    Class to split a SAM/BAM file into transcriptional intervals (tint's).
+
+    Parameters
+    ----------
+    bam_path : str
+        Path to BAM file. Must be sorted and in compressed BAM format.
+    contigs : Iterable[str] | None
+        Iterable of contigs to process. If None, all contigs will be processed.
+        This parameter does not override the contig_min_len parameter in the FredSplitParams object.
+    params : FredSplitParams
+        Parameters for FredSplit
+    rname_to_celltypes : str | None
+        Path to a file that maps read names to cell types. Each line should be in the format:
+        read_name\tcell_types
+        where cell_types is a comma-separated list of 0 or more cell types.
+        If rname_to_celltypes=None, all reads will be assigned to an empty tuple of cell types.
+    """
+
     def __init__(
         self,
+        bam_path: str,
+        contigs: None | Iterable[str] = None,
         params: FredSplitParams = FredSplitParams(),
         rname_to_celltypes: None | str = None,
     ) -> None:
+        self.sam = pysam.AlignmentFile(bam_path, "rb")
+        self.contigs: list[FredSplit.contig] = list()
         self.params = params
-        self.read_count = 0
-        self.tint_count = 0
         self.qname_to_celltypes: defaultdict[str, tuple[str, ...]] = defaultdict(tuple)
+        # Check if SAM is sorted and indexed
+        for x in self.sam.header.to_dict()["HD"]:
+            field = x["SO"].split(",")
+            assert (
+                field[0] == "coordinate"
+            ), f"{bam_path} SAM file must be sorted by coordinate"
+        assert self.sam.check_index(), f"{bam_path} SAM file must be indexed"
+        # Build list of contigs
+        if contigs is None:
+            contigs = set(self.sam.references)
+        else:
+            contigs = set(contigs)
+        for x in self.sam.header.to_dict()["SQ"]:
+            if x["SN"] not in contigs:
+                continue
+            if x["LN"] < self.params.contig_min_len:
+                continue
+            self.contigs.append(FredSplit.contig(name=x["SN"], length=x["LN"]))
+        # Build dictionary of read names to cell types
         if rname_to_celltypes is not None:
             for line in open(rname_to_celltypes):
                 read_name, cell_types = line.rstrip("\n").split("\t")
@@ -164,9 +168,20 @@ class FredSplit:
                     ct_set.add(ct)
                 self.qname_to_celltypes[read_name] = tuple(ct_set)
 
-    def get_tints(self, reads: list[Read], contig: str) -> Generator[Tint, None, None]:
+    @dataclass
+    class contig:
+        name: str
+        length: int
+
+        def __post_init__(self):
+            assert self.length > 0
+
+    @staticmethod
+    def get_tints(reads: list[Read]) -> Generator[list[Read], None, None]:
         """
-        Yields connected transcriptional intervals from a list of reads
+        Yields connected lists of reads that are connected by their exonic intervals.
+        The union of the output lists is equal to the input list.
+        No read is repeated in the output lists.
 
         Parameters
         ----------
@@ -175,7 +190,7 @@ class FredSplit:
 
         Returns
         -------
-        Generator[Tint, None, None]
+        Generator[list[Read], None, None]
             Generator of transcriptional intervals
         """
 
@@ -231,17 +246,17 @@ class FredSplit:
                         intervals[int_idx].end,
                     )
                 )
-            tint = Tint(
-                contig=contig,
-                tid=self.tint_count,
-                reads=[read for read in reads if read.idx in tint_rids],
-            )
-            assert len(tint.reads) == len(tint_rids)
-            yield tint
-            self.tint_count += 1
+            tint_reads = [read for read in reads if read.idx in tint_rids]
+            yield tint_reads
         assert all(enqueued)
 
-    def find_longest_polyA(self, seq: str) -> tuple[int, int, int]:
+    @staticmethod
+    def find_longest_polyA(
+        seq: str,
+        m_score: int,
+        x_score: int,
+        min_len: int,
+    ) -> tuple[int, int, int]:
         """
         Finds the longest polyA in the sequence.
 
@@ -249,7 +264,12 @@ class FredSplit:
         ----------
         seq : str
             Sequence
-
+        m_score : int
+            Match score
+        x_score : int
+            Mismatch score
+        min_len : int
+            Minimum length of polyA (reports 0 length if the polyA is shorter than this value)
         Returns
         -------
         tuple[int, int, int]
@@ -262,13 +282,10 @@ class FredSplit:
         max_length = 0
         for char in "AT":
             if seq[0] == char:
-                scores = [self.params.polyA_m_score]
+                scores = [m_score]
             else:
                 scores = [0]
-            for m in (
-                self.params.polyA_m_score if c == char else self.params.polyA_x_score
-                for c in seq[1:]
-            ):
+            for m in (m_score if c == char else x_score for c in seq[1:]):
                 scores.append(max(0, scores[-1] + m))
 
             for is_positive, g in groupby(enumerate(scores), lambda x: x[1] > 0):
@@ -279,7 +296,7 @@ class FredSplit:
                 last_idx += 1
                 first_idx = idxs[0]
                 length = last_idx - first_idx
-                if length > max_length and length >= self.params.polyA_min_len:
+                if length > max_length and length >= min_len:
                     max_length = length
                     result = (first_idx, length, len(seq) - last_idx)
         return result
@@ -318,7 +335,8 @@ class FredSplit:
 
     @staticmethod
     def get_intervals(
-        aln: pysam.AlignedSegment, cigar_max_del: int
+        aln: pysam.AlignedSegment,
+        cigar_max_del: int,
     ) -> list[PairedInterval]:
         """
         Returns a list of intervals of the alignment.
@@ -331,6 +349,14 @@ class FredSplit:
         ----------
         aln : pysam.AlignedSegment
             pysam AlignedSegment object
+        cigar_max_del : int
+            Maximum deletion (op='D') length to not be considered as a splice junction.
+            Any deletion longer than this value will be considered as a splice junction.
+
+        Returns
+        -------
+        list[PairedInterval]
+            List of exonic intervals of the alignment
         """
         assert (
             aln.cigartuples is not None
@@ -416,15 +442,24 @@ class FredSplit:
             )
         return final_intervals
 
-    def overlapping_reads(self, sam, contig: str) -> Generator[list[Read], None, None]:
+    def overlapping_reads(
+        self,
+        sam: pysam.AlignmentFile,
+        contig: str,
+        read_starting_index: int = 0,
+    ) -> Generator[list[Read], None, None]:
         """
         Generates lists of reads with overlapping alignment (exonically
         or intronically) on the contig
 
         Parameters
         ----------
-        sam_path : str
-            Path to SAM/BAM file
+        sam : pysam.AlignmentFile
+            pysam AlignmentFile object
+        contig : str
+            Contig name to extract reads from
+        read_starting_index : int
+            Starting index of the reads used for giving incremental IDs to the reads
         Yields
         ------
         Generator[list[Read], None, None]
@@ -446,10 +481,16 @@ class FredSplit:
             seq = str(aln.query_sequence)
             intervals = self.get_intervals(aln, self.params.cigar_max_del)
             lpA_a, lpA_b, lpA_c = self.find_longest_polyA(
-                seq[: intervals[0].query.start]
+                seq=seq[: intervals[0].query.start],
+                m_score=self.params.polyA_m_score,
+                x_score=self.params.polyA_x_score,
+                min_len=self.params.polyA_min_len,
             )
             rpA_a, rpA_b, rpA_c = self.find_longest_polyA(
-                seq[intervals[-1].query.end :]
+                seq=seq[intervals[-1].query.end :],
+                m_score=self.params.polyA_m_score,
+                x_score=self.params.polyA_x_score,
+                min_len=self.params.polyA_min_len,
             )
             if lpA_b > 0 and rpA_b > 0:
                 polyAs = (Read.PolyA(), Read.PolyA())
@@ -467,7 +508,7 @@ class FredSplit:
                     ),
                 )
             read = Read(
-                idx=self.read_count,
+                idx=len(reads) + read_starting_index,
                 name=qname,
                 strand="-" if aln.is_reverse else "+",
                 intervals=intervals,
@@ -475,7 +516,6 @@ class FredSplit:
                 polyAs=polyAs,
                 cell_types=self.qname_to_celltypes[qname],
             )
-            self.read_count += 1
             s = intervals[0].target.start
             e = intervals[-1].target.end
             if (start, end) == (-1, -1):
@@ -491,46 +531,54 @@ class FredSplit:
 
     def generate_all_tints(
         self,
-        sam_path: str,
         pbar_tint: tqdm | None = None,
         pbar_reads: tqdm | None = None,
     ) -> Generator[Tint, None, None]:
-        sam = pysam.AlignmentFile(sam_path, "rb")
-        contigs_and_lens: list[tuple[str, int]] = list()
-        for x in sam.header.to_dict()["SQ"]:
-            if x["LN"] < self.params.contig_min_len:
-                continue
-            contigs_and_lens.append((x["SN"], x["LN"]))
-        pbar_conting = tqdm(
-            desc=f"[freddie] Contig progress",
-            total=1,
+        """
+        Generates all transcriptional intervals from a SAM/BAM file
+
+        Parameters
+        ----------
+        pbar_tint : tqdm | None
+            Progress bar for transcriptional intervals.
+            The total will be updated by this method while
+            the progress value should be updated by the caller.
+        pbar_reads : tqdm | None
+            Progress bar for reads.
+            The total will be updated by this method while
+            the progress value should be updated by the caller.
+        """
+        pbar_genome = tqdm(
+            desc="[freddie] Genome-wide progress",
+            total=sum(contig.length for contig in self.contigs),
             unit="bp",
             unit_scale=True,
             leave=True,
         )
-        pbar_genome = tqdm(
-            desc=f"[freddie] Genome progress",
-            total=len(contigs_and_lens),
-            unit="contig",
-            leave=True,
-        )
-        for contig, length in contigs_and_lens:
-            pbar_conting.reset()
-            pbar_conting.total = length
-            pbar_conting.set_description(f"[freddie] Contig {contig} progress")
+        tint_count: int = 0
+        read_index: int = 0
+        for contig in self.contigs:
+            pbar_genome.set_description(
+                f"[freddie] Genome-wide progress (congig: {contig})"
+            )
             last_pos = 0
-            for reads in self.overlapping_reads(sam, contig):
+            for reads in self.overlapping_reads(self.sam, contig.name, read_index):
+                read_index += len(reads)
                 cur_pos = reads[-1].intervals[-1].target.end
-                pbar_conting.update(cur_pos - last_pos)
+                pbar_genome.update(cur_pos - last_pos)
                 last_pos = cur_pos
-                for tint in self.get_tints(reads, contig):
+                for tint_reads in self.get_tints(reads):
+                    tint = Tint(
+                        contig=contig.name,
+                        reads=tint_reads,
+                        tid=tint_count,
+                    )
+                    tint_count += 1
                     if pbar_reads is not None:
-                        pbar_reads.total += len(tint.reads)
+                        pbar_reads.total += len(tint_reads)
                         pbar_reads.refresh()
                     if pbar_tint is not None:
                         pbar_tint.total += 1
                         pbar_tint.refresh()
                     yield tint
-            pbar_genome.update(1)
         pbar_genome.close()
-        pbar_conting.close()
