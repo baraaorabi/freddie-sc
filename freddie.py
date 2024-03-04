@@ -14,11 +14,11 @@ import pulp
 
 
 def parse_args():
-    split_params = FredSplitParams()
-    isoform_params = IsoformsParams()
-    ilp_params = IlpParams()
+    default_split_params = FredSplitParams()
+    default_isoform_params = IsoformsParams()
+    default_ilp_params = IlpParams()
     if "GUROBI" in pulp.listSolvers(onlyAvailable=True):
-        ilp_params.ilp_solver = "GUROBI"
+        default_ilp_params.ilp_solver = "GUROBI"
 
     parser = argparse.ArgumentParser(
         description="scFreddie: Detecting isoforms from single-cell long-read RNA-seq data",
@@ -72,62 +72,62 @@ def parse_args():
     )
     parser.add_argument(
         "--contig-min-len",
-        default=split_params.contig_min_len,
+        default=default_split_params.contig_min_len,
         type=int,
         help="Minimum contig size. Any contig with less size will not be processes.",
     )
     parser.add_argument(
         "--cigar-max-del",
-        default=split_params.cigar_max_del,
+        default=default_split_params.cigar_max_del,
         type=int,
         help="Maximum deletion size in CIGAR. Deletions (or N operators) longer than this will trigger a splice split.",
     )
     parser.add_argument(
         "--polyA-min-len",
-        default=split_params.polyA_min_len,
+        default=default_split_params.polyA_min_len,
         type=int,
         help="Minimum polyA length. Any polyA shorter than this will be ignored.",
     )
     parser.add_argument(
         "--polyA-scores",
-        default=f"{split_params.polyA_m_score},{split_params.polyA_x_score}",
+        default=f"{default_split_params.polyA_m_score},{default_split_params.polyA_x_score}",
         type=str,
         help="PolyA scores. Comma-separated scores for matching and mismatching bases.",
     )
     parser.add_argument(
         "--max-isoform-count",
-        default=isoform_params.max_isoform_count,
+        default=default_isoform_params.max_isoform_count,
         type=int,
         help="Maximum number of isoforms to output per transcriptional interval (i.e. ~gene).",
     )
     parser.add_argument(
         "--min-read-support",
-        default=isoform_params.min_read_support,
+        default=default_isoform_params.min_read_support,
         type=int,
         help="Minimum number of reads supporting an isoform.",
     )
     parser.add_argument(
         "--ilp-time-limit",
         type=int,
-        default=ilp_params.timeLimit,
+        default=default_ilp_params.timeLimit,
         help="Time limit for ILP solver in seconds.",
     )
     parser.add_argument(
         "--max-correction-len",
         type=int,
-        default=ilp_params.max_correction_len,
+        default=default_ilp_params.max_correction_len,
         help="Maximum length of canonical intervals correction in each read.",
     )
     parser.add_argument(
         "--max-correction-count",
         type=int,
-        default=ilp_params.max_correction_count,
+        default=default_ilp_params.max_correction_count,
         help="Maximum number of canonical intervals correction in each read.",
     )
     parser.add_argument(
         "--ilp-solver",
         type=str,
-        default=ilp_params.ilp_solver,
+        default=default_ilp_params.ilp_solver,
         choices=pulp.listSolvers(onlyAvailable=True),
         help="ILP solver.",
     )

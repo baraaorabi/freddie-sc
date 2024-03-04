@@ -24,8 +24,18 @@ class IlpParams:
     ilp_threads: int = 1
     ignore_celltype: bool = False
 
+    def __post_init__(self):
+        assert 0 < self.timeLimit
+        assert 0 < self.max_correction_len
+        assert 0 < self.max_correction_count
+        assert 0 < self.ilp_threads
 
-class InfeasibleILP(Exception):
+
+class UnsolvableILP(Exception):
+    pass
+
+
+class TimeoutILP(Exception):
     pass
 
 
@@ -415,9 +425,7 @@ class FredILP:
         self.model.setObjective(obj=OBJ_SUM)
         self.model.sense = pulp.LpMinimize
 
-    def solve(
-        self,
-    ) -> tuple[int, tuple[list[aln_t], ...], tuple[list[int], ...]]:
+    def solve(self) -> tuple[int, tuple[list[int], ...]]:
         self.model.solve(
             solver=pulp.getSolver(
                 self.params.ilp_solver,
@@ -428,25 +436,20 @@ class FredILP:
         )
         status = self.model.status
         bins: tuple[list[int], ...] = tuple(list() for _ in range(self.K))
-        bin_structures: tuple[list[aln_t], ...] = tuple(list() for _ in range(self.K))
-        if not status in (pulp.LpStatusNotSolved, pulp.LpStatusOptimal):
-            raise InfeasibleILP(
-                f"ILP solver failed to solve the model, status: {pulp.LpStatus[status]}"
-            )
-        if status == pulp.LpStatusOptimal:
-            for k in range(0, self.K):
-                for i, ridxs in enumerate(self.ridxs):
-                    val = self.R2I[i, k].varValue
-                    assert val != None, f"Unsolved variable, {self.R2I[i, k]}"
-                    if val > 0.5:
-                        bins[k].extend(ridxs)
-                if k == 0:
-                    bin_structures[k].extend(
-                        [aln_t.unaln for _ in range(len(self.interval_lengths))]
-                    )
-                    continue
-                for j in range(len(self.interval_lengths)):
-                    val = self.E2I[j, k].varValue
-                    assert val != None, f"Unsolved variable, {self.E2I[j, k]}"
-                    bin_structures[k].append(aln_t.exon if val > 0.5 else aln_t.intron)
-        return self.model.status, bin_structures, bins
+        if status in (
+            pulp.LpStatusInfeasible,
+            pulp.LpStatusUnbounded,
+            pulp.LpStatusUndefined,
+        ):
+            raise UnsolvableILP(pulp.LpStatus[status])
+        if status == pulp.LpStatusNotSolved:
+            raise TimeoutILP(pulp.LpStatus[status])
+        assert status == pulp.LpStatusOptimal, f"ILP status: {pulp.LpStatus[status]}"
+
+        for k in range(0, self.K):
+            for i, ridxs in enumerate(self.ridxs):
+                val = self.R2I[i, k].varValue
+                assert val != None, f"Unsolved variable, {self.R2I[i, k]}"
+                if val > 0.5:
+                    bins[k].extend(ridxs)
+        return self.model.status, bins

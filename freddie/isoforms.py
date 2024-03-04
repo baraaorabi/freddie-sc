@@ -1,8 +1,9 @@
+import enum
 import functools
 from dataclasses import dataclass
-import sys
+import pickle
 
-from freddie.ilp import FredILP, IlpParams, InfeasibleILP
+from freddie.ilp import FredILP, IlpParams, UnsolvableILP, TimeoutILP
 from freddie.segment import CanonIntervals, PairedInterval, aln_t
 from freddie.split import Interval, Read, Tint
 
@@ -10,11 +11,21 @@ import numpy as np
 import pulp
 
 
+class timeoutStrat(enum.IntEnum):
+    stop = 0
+    subsample = 1
+
+
 @dataclass
 class IsoformsParams:
     max_isoform_count: int = 20
     min_read_support: int = 3
+    timeout_stategy: timeoutStrat = timeoutStrat.stop
     ilp_params: IlpParams = IlpParams()
+
+    def __post_init__(self):
+        assert 1 <= self.max_isoform_count
+        assert 1 <= self.min_read_support
 
 
 @dataclass
@@ -184,9 +195,34 @@ def get_isoforms(
     reads: list[Read] = tint.reads
     isoforms = list()
     for isoform_index in range(params.max_isoform_count):
-        recycling_reads, isoform_reads = run_ilp(reads, params)
-        if len(isoform_reads) < params.min_read_support:
+        try:
+            canon_ints, recycling_bin, isoform_bin, unsampled_bin = run_ilp_loop(
+                reads, params
+            )
+        except (UnsolvableILP, TimeoutILP) as e:
+            pickle.dump(
+                reads,
+                open(
+                    f"tints/{str(e).replace(' ', '')}.contig_{tint.contig}.tint_{tint.tid}.pickle",
+                    "wb+",
+                ),
+            )
             break
+        if len(isoform_bin) < params.min_read_support:
+            break
+        isoform_reads = [reads[ridx] for ridx in isoform_bin]
+        recycling_reads = [reads[ridx] for ridx in recycling_bin]
+        if len(unsampled_bin) > 0:
+            unsampled_isoform_reads, unsampled_recycing_reads = get_compatible_reads_bins(
+                [reads[ridx] for ridx in unsampled_bin],
+                isoform_reads,
+                canon_ints,
+                [aln_t.exon] * (len(canon_ints.intervals) - 1),
+                params.ilp_params.max_correction_len,
+            )
+            isoform_reads.extend(unsampled_isoform_reads)
+            recycling_reads.extend(unsampled_recycing_reads)
+
         isoform = Isoform(
             tid=tint.tid,
             contig=tint.contig,
@@ -201,7 +237,35 @@ def get_isoforms(
     return tint, isoforms
 
 
-def run_ilp(reads: list[Read], params: IsoformsParams) -> tuple[list[Read], list[Read]]:
+def run_ilp(
+    canon_ints: CanonIntervals, params: IsoformsParams
+) -> tuple[int, list[int], list[int]]:
+    """
+    Args:
+        canon_ints: CanonIntervals
+        params: Isoforms params dataclass
+
+    Returns:
+        recycling_bin: List of ridxs belonging to the recycling bin
+        isoform_bin: List of ridxs belonging to the isoform bin
+    """
+    ilp: FredILP = FredILP(canon_ints, params.ilp_params)
+    ilp.build_model(K=2)
+    status, (recycling_bin, isoform_bin) = ilp.solve()
+    return status, recycling_bin, isoform_bin
+
+
+def canonize_reads(reads):
+    canon_ints = CanonIntervals(reads)
+    for i in range(10):
+        canon_ints.pop(i)
+    return canon_ints
+
+
+def run_ilp_loop(
+    reads: list[Read],
+    params: IsoformsParams,
+) -> tuple[CanonIntervals, list[int], list[int], list[int]]:
     """
     Run ILP with the given reads and return the recycling reads and isoform reads.
     If the ILP fails to find an optimal solution, iteratively keep halving the
@@ -210,74 +274,54 @@ def run_ilp(reads: list[Read], params: IsoformsParams) -> tuple[list[Read], list
 
     Args:
         reads: List of reads
-        params: Isoforms params dataclass
+        params: IsoformsParams object
 
     Returns:
-        recycling_reads: List of recycling reads
-        isoform_reads: List of isoform reads
+        canon_ints: Canonical intervals of the recycling + isoform reads
+        recycling_ridxs: List of recycling read indices
+        isoform_ridxs: List of isoform read indices
+        unsampled_ridxs: List of unsampled read indices
     """
-    isoform_reads: list[Read] = list()
-    recycling_reads: list[Read] = reads
+    N = len(reads)
+    reads_idxs = list(range(N))
+    canon_ints = canonize_reads(reads)
+    if len(reads) < params.min_read_support:
+        return canon_ints, reads_idxs, list(), list()
+    try:
+        status, recycling_bin, isoform_bin = run_ilp(canon_ints, params)
+        assert status == pulp.LpStatusOptimal
+        return canon_ints, recycling_bin, isoform_bin, list()
+    except TimeoutILP:
+        pass
 
-    sample_reads: list[Read] = reads
-    unsampled_reads: list[Read] = list()
-    while len(sample_reads) >= params.min_read_support:
-        canon_ints = CanonIntervals(sample_reads)
-        for i in range(10):
-            canon_ints.pop(i)
-        ilp: FredILP = FredILP(canon_ints, params.ilp_params)
-        ilp.build_model(K=2)
-        try:
-            status, vects, bins = ilp.solve()
-        except InfeasibleILP:
-            print(f"ILP infeasible for {len(sample_reads)} reads:", file=sys.stderr)
-            for read in sample_reads[:10]:
-                print(read.name, file=sys.stderr)
-            if len(sample_reads) > 10:
-                print("...", file=sys.stderr)
-            raise InfeasibleILP
-        assert len(vects) == len(bins) == 2, f"Expected 2 bins, got {len(bins)}"
-        recycling_bin, isoform_bin = bins
-        isoform_vect = vects[1]
-        # If ILP fails to find optimal solution, retry with half the reads
-        if status == pulp.LpStatusOptimal:
-            recycling_reads = [sample_reads[idx] for idx in recycling_bin]
-            isoform_reads = [sample_reads[idx] for idx in isoform_bin]
-            # If the ILP was run with less than all reads, check if there are
-            # any reads that are compatible with the isoform
-            if len(unsampled_reads) > 0:
-                incompatible_reads, compatible_reads = get_compatible_reads_bins(
-                    unsampled_reads=unsampled_reads,
-                    isoform_reads=isoform_reads,
-                    slack=params.ilp_params.max_correction_len,
-                    canon_ints=canon_ints,
-                    i_vect=isoform_vect,
-                )
-                isoform_reads.extend(compatible_reads)
-                recycling_reads.extend(incompatible_reads)
-            reads = recycling_reads
-            break
+    if params.timeout_stategy == timeoutStrat.stop:
+        raise TimeoutILP
+    elif params.timeout_stategy == timeoutStrat.subsample:
+        N2 = min(
+            int(params.ilp_params.timeLimit * 30),  # Each 30 reads take ~1sec
+            N // 2,
+        )
+    else:
+        raise ValueError(f"Invalid timeout strategy: {params.timeout_stategy}")
+
+    sample_ridxs: list[int] = list()
+    unsampled_ridxs: list[int] = list()
+    S: set[int] = set(np.random.choice(reads_idxs, size=N2, replace=False))
+    for ridx in reads_idxs:
+        if ridx in S:
+            sample_ridxs.append(ridx)
         else:
-            sample_ridxs = set(
-                np.random.choice(
-                    list(range(len(reads))),
-                    size=len(sample_reads) // 2,
-                    replace=False,
-                )
-            )
-            print(
-                f"ILP of {len(sample_reads)} reads not solved, "
-                + f"retrying with {len(sample_ridxs)} read subset of reads",
-                file=sys.stderr,
-            )
-            sample_reads = list()
-            unsampled_reads = list()
-            for ridx in range(len(reads)):
-                if ridx in sample_ridxs:
-                    sample_reads.append(reads[ridx])
-                else:
-                    unsampled_reads.append(reads[ridx])
-    return recycling_reads, isoform_reads
+            unsampled_ridxs.append(ridx)
+
+    _, sub_recycling_bin, sub_isoform_bin, sub_unsampled_bin = run_ilp_loop(
+        [reads[ridx] for ridx in sample_ridxs],
+        params,
+    )
+    recycling_bin = [sample_ridxs[ridx] for ridx in sub_recycling_bin]
+    isoform_bin = [sample_ridxs[ridx] for ridx in sub_isoform_bin]
+    unsampled_ridxs.extend([sample_ridxs[ridx] for ridx in sub_unsampled_bin])
+
+    return canon_ints, recycling_bin, isoform_bin, unsampled_ridxs
 
 
 def get_compatible_reads_bins(
