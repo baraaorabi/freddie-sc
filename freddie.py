@@ -155,7 +155,7 @@ def main():
     args = parse_args()
 
     split = FredSplit(
-        bam_path=args.sam,
+        bam_path=args.bam,
         params=FredSplitParams(
             cigar_max_del=args.cigar_max_del,
             polyA_m_score=args.polyA_m_score,

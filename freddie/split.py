@@ -140,11 +140,12 @@ class FredSplit:
         self.params = params
         self.qname_to_celltypes: defaultdict[str, tuple[str, ...]] = defaultdict(tuple)
         # Check if SAM is sorted and indexed
-        for x in self.sam.header.to_dict()["HD"]:
-            field = x["SO"].split(",")
-            assert (
-                field[0] == "coordinate"
-            ), f"{bam_path} SAM file must be sorted by coordinate"
+        for k, v in self.sam.header.to_dict()["HD"].items():
+            if k == "SO":
+                field = v.split(",")
+                assert (
+                    field[0] == "coordinate"
+                ), f"{bam_path} SAM file must be sorted by coordinate"
         assert self.sam.check_index(), f"{bam_path} SAM file must be indexed"
         # Build list of contigs
         if contigs is None:
