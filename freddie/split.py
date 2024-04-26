@@ -560,7 +560,7 @@ class FredSplit:
         read_index: int = 0
         for contig in self.contigs:
             pbar_genome.set_description(
-                f"[freddie] Genome-wide progress (congig: {contig})"
+                f"[freddie] Genome-wide progress (contig: {contig.name})"
             )
             last_pos = 0
             for reads in self.overlapping_reads(self.sam, contig.name, read_index):
